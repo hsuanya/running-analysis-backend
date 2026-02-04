@@ -18,15 +18,25 @@ RUN_SESSION_DIR = "/home/hsuanya/workspace/running_analysis/backend/data/run_ses
 os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
 os.makedirs(RUN_SESSION_DIR, exist_ok=True)
 
+# --- CONFIG ---
+# 是否在分析失敗時使用假資料 (True: 開啟居家測試模式, False: 關閉)
+ENABLE_MOCK_ON_FAILURE = True
+
 def move_temp_video_and_del_thumbnail(temp_video_id: str, runner_id: str, run_session_id: str, camera_index: int):
     image_path = os.path.join(TEMP_UPLOAD_DIR, temp_video_id + ".jpg")
     if os.path.exists(image_path):
         os.remove(image_path)
 
-    # 找出所有同名檔案
-    temp_video_path = glob.glob(
-        os.path.join(TEMP_UPLOAD_DIR, temp_video_id + ".*")
-    )[0]
+    matches = glob.glob(
+        os.path.join(TEMP_UPLOAD_DIR, temp_video_id + "*")
+    )
+    # 排除 .jpg (縮圖)
+    matches = [f for f in matches if not f.endswith(".jpg")]
+
+    if not matches:
+        raise HTTPException(404, f"Temperature video file not found for ID: {temp_video_id}")
+        
+    temp_video_path = matches[0]
     ext = os.path.splitext(temp_video_path)[1]
     
     dest_dir = os.path.join(RUN_SESSION_DIR, runner_id, run_session_id)
@@ -77,15 +87,41 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
             await session.commit()
         except Exception as e:
             print(f"Error during analysis for session {run_session_id}: {e}")
-            try:
-                # 使用新的 session 或是確保目前的 session 還可用
-                run_session = await session.get(RunSession, UUID(run_session_id))
-                if run_session:
-                    run_session.status = "failed"
-                    await session.commit()
-                    print(f"Set session {run_session_id} status to failed")
-            except Exception as inner_e:
-                print(f"Failed to set status to failed for session {run_session_id}: {inner_e}")
+            
+            # --- Mock Data Fallback ---
+            if ENABLE_MOCK_ON_FAILURE:
+                # 為了測試流程，當分析失敗時，我們寫入假資料並標記為完成
+                print(f"Falling back to mock data for session {run_session_id}")
+                try:
+                    analysis_meta = AnalysisMeta(
+                        run_session_id=UUID(run_session_id),
+                        total_time=10.0,
+                        avg_velocity=5.0,
+                        avg_acceleration=0.5,
+                        avg_step_length=1.2,
+                        summary={"mock": "True", "error": str(e)}
+                    )
+                    session.add(analysis_meta)
+                    
+                    run_session = await session.get(RunSession, UUID(run_session_id))
+                    if run_session:
+                        run_session.status = "done"
+                        run_session.progress = 100
+                        await session.commit()
+                        print(f"Set session {run_session_id} status to done (Mock Data)")
+                except Exception as inner_e:
+                    print(f"Failed to use mock data for session {run_session_id}: {inner_e}")
+            else:
+                # 正常失敗處理邏輯
+                try:
+                    # 使用新的 session 或是確保目前的 session 還可用
+                    run_session = await session.get(RunSession, UUID(run_session_id))
+                    if run_session:
+                        run_session.status = "failed"
+                        await session.commit()
+                        print(f"Set session {run_session_id} status to failed")
+                except Exception as inner_e:
+                    print(f"Failed to set status to failed for session {run_session_id}: {inner_e}")
 
 @router.post("/temp_video/{index}")
 async def upload_video(
