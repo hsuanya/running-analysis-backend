@@ -1,4 +1,4 @@
-import os, shutil, uuid, asyncio, glob
+import os, shutil, uuid, asyncio, glob, json
 from uuid import UUID
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy import select, update
@@ -67,7 +67,28 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                         await sess.commit()
                 asyncio.run_coroutine_threadsafe(update_db(), loop)
 
-            # 1️⃣ 執行分析
+            # 1️⃣ 準備 metadata.json (包含所有相機的錨點)
+            stmt = select(Video).where(Video.run_session_id == UUID(run_session_id))
+            result = await session.execute(stmt)
+            videos = result.scalars().all()
+            
+            meta_data = {
+                "run_session_id": run_session_id,
+                "camera_count": camera_count,
+                "cameras": []
+            }
+            for v in videos:
+                meta_data["cameras"].append({
+                    "camera_index": v.camera_index,
+                    "anchors": json.loads(v.anchors) if v.anchors else None,
+                    "top_distance_m": v.top_distance_m,
+                    "bottom_distance_m": v.bottom_distance_m,
+                })
+            
+            with open(os.path.join(folder, "metadata.json"), "w") as f:
+                json.dump(meta_data, f, indent=4)
+
+            # 2️⃣ 執行分析
             raw_data = await asyncio.to_thread(track_and_draw, folder, "analyzed_video", camera_count, progress_callback)
 
             # 2️⃣ 將 raw_data 寫入資料庫
@@ -177,12 +198,26 @@ async def upload_all_info(
     await session.commit()
     await session.refresh(runSession)
 
-    for cameraIndex, tempVideoId in enumerate(req.tempVideoIds):
+    for cameraIndex, info in enumerate(req.videos):
+        tempVideoId = info.tempVideoId
         video_stored_path = move_temp_video_and_del_thumbnail(tempVideoId, req.runnerId, str(runSession.id), cameraIndex)
+        
+        # 處理錨點資料
+        anchors_json = None
+        top_d = None
+        bot_d = None
+        if info.anchors:
+            anchors_json = json.dumps([p.dict() for p in info.anchors.points])
+            top_d = info.anchors.topDistanceM
+            bot_d = info.anchors.bottomDistanceM
+
         video = Video(
             run_session_id=runSession.id,
             camera_index=cameraIndex,
-            video_path=video_stored_path
+            video_path=video_stored_path,
+            anchors=anchors_json,
+            top_distance_m=top_d,
+            bottom_distance_m=bot_d
         )
         session.add(video)
         await session.commit()
@@ -216,10 +251,23 @@ async def upload_seperately_new(
 
 
     videoStoredPath = move_temp_video_and_del_thumbnail(req.tempVideoId, req.runnerId, str(runSession.id), req.cameraIndex)
+    
+    # 處理錨點
+    anchors_json = None
+    top_d = None
+    bot_d = None
+    if req.anchors:
+        anchors_json = json.dumps([p.dict() for p in req.anchors.points])
+        top_d = req.anchors.topDistanceM
+        bot_d = req.anchors.bottomDistanceM
+
     video = Video(
         run_session_id=runSession.id,
         camera_index=req.cameraIndex,
-        video_path=videoStoredPath
+        video_path=videoStoredPath,
+        anchors=anchors_json,
+        top_distance_m=top_d,
+        bottom_distance_m=bot_d
     )
     session.add(video)
     await session.commit()
@@ -253,10 +301,23 @@ async def upload_seperately_select(
     session: AsyncSession = Depends(get_session)
 ) -> UploadSeperatelyStatus:
     stored_path = move_temp_video_and_del_thumbnail(req.tempVideoId, req.runnerId, req.runSessionId, req.cameraIndex)
+    
+    # 處理錨點
+    anchors_json = None
+    top_d = None
+    bot_d = None
+    if req.anchors:
+        anchors_json = json.dumps([p.dict() for p in req.anchors.points])
+        top_d = req.anchors.topDistanceM
+        bot_d = req.anchors.bottomDistanceM
+
     video = Video(
         run_session_id=UUID(req.runSessionId),
         camera_index=req.cameraIndex,
-        video_path=stored_path
+        video_path=stored_path,
+        anchors=anchors_json,
+        top_distance_m=top_d,
+        bottom_distance_m=bot_d
     )
     session.add(video)
     await session.commit()

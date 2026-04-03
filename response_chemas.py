@@ -45,20 +45,33 @@ class GraphDataOut(BaseModel):
     x: list[float]
     y: list[float]
 
+class AnchorPoint(BaseModel):
+    x: float
+    y: float
+
+class AnchorResult(BaseModel):
+    points: List[AnchorPoint]
+    topDistanceM: float
+    bottomDistanceM: float
+
+class VideoUploadInfo(BaseModel):
+    tempVideoId: str
+    anchors: Optional[AnchorResult] = None
+
 class UploadAllRequest(BaseModel):
     runnerId: str
     date: str
     fps: int
     cameraCount: int
     note: str
-    tempVideoIds: list[str]
+    # 原本是 tempVideoIds: list[str]，改為包含錨點的物件列表
+    videos: List[VideoUploadInfo]
 
 class UploadSeperatelyStatus(BaseModel):
     runnerId: str
     runSessionId: str
     isAllUploaded: bool
     unuploadedCameraIndexes: List[int]
-
 
 class UploadSeperatelyNewRequest(BaseModel):
     runnerId: str
@@ -68,9 +81,11 @@ class UploadSeperatelyNewRequest(BaseModel):
     note: str
     cameraIndex: int
     tempVideoId: str
+    anchors: Optional[AnchorResult] = None
 
 class UploadSeperatelySelectRequest(BaseModel):
     runnerId: str
     runSessionId: str
     cameraIndex: int
     tempVideoId: str
+    anchors: Optional[AnchorResult] = None

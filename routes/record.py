@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Dict, List, Any
 
@@ -86,7 +87,19 @@ async def record_websocket(websocket: WebSocket):
             msg_type = msg.get("type")
             msg_data = msg.get("data", {})
 
-            if msg_type == "createRoom":
+            # print(f"📦 [Test] 收到訊息: {msg_type}", flush=True)
+            if msg_type == "sync":
+                client_send_time = msg_data.get("clientSendTime", "")
+                server_time = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+                await websocket.send_json({
+                    "type": "sync",
+                    "data": {
+                        "clientSendTime": client_send_time,
+                        "serverTime": server_time
+                    }
+                })
+
+            elif msg_type == "createRoom":
                 expected_camera_count = msg_data.get("expectedCameraCount", 1)
                 room_id = manager.create_room(expected_camera_count)
                 current_room = manager.get_room(room_id)
@@ -120,6 +133,9 @@ async def record_websocket(websocket: WebSocket):
 
             elif msg_type == "startRecording":
                 if current_room:
+                    scheduled_time = datetime.now(timezone.utc) + timedelta(seconds=2.0)
+                    msg_data["scheduledStartTime"] = scheduled_time.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+                    
                     current_room.recording_status = "recording"
                     await current_room.broadcast({
                         "type": "startRecording",
@@ -149,6 +165,23 @@ async def record_websocket(websocket: WebSocket):
                     if current_room:
                         await current_room.broadcast_status()
 
+            elif msg_type == "cameraPreview":
+                if current_room and current_member:
+                    # 加入發送者的資訊
+                    msg_data["memberId"] = current_member.id
+                    msg_data["cameraIndex"] = current_member.camera_index
+                    
+                    # 僅轉發給 Master
+                    for member in current_room.members:
+                        if member.is_master:
+                            try:
+                                await member.ws.send_json({
+                                    "type": "cameraPreview",
+                                    "data": msg_data
+                                })
+                            except Exception:
+                                pass
+
     except WebSocketDisconnect:
         if current_room and current_member in current_room.members:
             current_room.members.remove(current_member)
@@ -158,7 +191,7 @@ async def record_websocket(websocket: WebSocket):
             else:
                 await current_room.broadcast_status()
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        print(f"WebSocket error: {e}", flush=True)
         if current_room and current_member in current_room.members:
             current_room.members.remove(current_member)
             await current_room.broadcast_status()
