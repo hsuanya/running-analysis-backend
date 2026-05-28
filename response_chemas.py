@@ -37,13 +37,18 @@ class UnanalyzedRunSessionInfoOut(BaseModel):
     unuploadedCameraIndexes: List[int]
     videoPaths: List[Optional[str]]
 
+class GraphSeriesOut(BaseModel):
+    name: str          # e.g. "main", "left", "right"
+    y: list[float]
+
 class GraphDataOut(BaseModel):
     title: str
     yLabel: str
     yMin: float
     yMax: float
-    x: list[float]
-    y: list[float]
+    x: list[float]          # shared x-axis for all series
+    series: list[GraphSeriesOut]
+    category: str           # "metrics" | "angles"
 
 class AnchorPoint(BaseModel):
     x: float

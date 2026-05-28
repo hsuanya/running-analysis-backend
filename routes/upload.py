@@ -5,8 +5,13 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.session import get_session, async_session
 from db_models import RunSession, AnalysisMeta, Video
-from analyze import track_and_draw
+import sys
+pipeline_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "runner-analysis-pipeline"))
+if pipeline_dir not in sys.path:
+    sys.path.insert(0, pipeline_dir)
+from analyze import run_analysis
 from datetime import datetime
+import pandas as pd
 import cv2
 from pathlib import Path
 from response_chemas import UploadSeperatelyStatus, UploadSeperatelyNewRequest, UploadSeperatelySelectRequest, UploadAllRequest
@@ -20,7 +25,7 @@ os.makedirs(RUN_SESSION_DIR, exist_ok=True)
 
 # --- CONFIG ---
 # 是否在分析失敗時使用假資料 (True: 開啟居家測試模式, False: 關閉)
-ENABLE_MOCK_ON_FAILURE = True
+ENABLE_MOCK_ON_FAILURE = False
 
 def move_temp_video_and_del_thumbnail(temp_video_id: str, runner_id: str, run_session_id: str, camera_index: int):
     image_path = os.path.join(TEMP_UPLOAD_DIR, temp_video_id + ".jpg")
@@ -72,33 +77,89 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
             result = await session.execute(stmt)
             videos = result.scalars().all()
             
-            meta_data = {
-                "run_session_id": run_session_id,
-                "camera_count": camera_count,
+            config_dict = {
                 "cameras": []
             }
-            for v in videos:
-                meta_data["cameras"].append({
+            videos_sorted = sorted(videos, key=lambda x: x.camera_index)
+            meta_data_cameras = []
+            
+            import cv2
+            for v in videos_sorted:
+                anchors = json.loads(v.anchors) if v.anchors else None
+                cam_cfg = {"video_path": v.video_path}
+                if anchors and len(anchors) == 4:
+                    cap = cv2.VideoCapture(v.video_path)
+                    if cap.isOpened():
+                        w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+                        h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                        cap.release()
+                        
+                        if w > 0 and h > 0:
+                            cam_cfg["start_line"] = [
+                                [int(anchors[0]["x"] * w), int(anchors[0]["y"] * h)],
+                                [int(anchors[3]["x"] * w), int(anchors[3]["y"] * h)]
+                            ]
+                            cam_cfg["end_line"] = [
+                                [int(anchors[1]["x"] * w), int(anchors[1]["y"] * h)],
+                                [int(anchors[2]["x"] * w), int(anchors[2]["y"] * h)]
+                            ]
+                        else:
+                            # Fallback if invalid dimensions
+                            cam_cfg["start_line"] = [[anchors[0]["x"], anchors[0]["y"]], [anchors[1]["x"], anchors[1]["y"]]]
+                            cam_cfg["end_line"] = [[anchors[2]["x"], anchors[2]["y"]], [anchors[3]["x"], anchors[3]["y"]]]
+                    else:
+                        cam_cfg["start_line"] = [[anchors[0]["x"], anchors[0]["y"]], [anchors[1]["x"], anchors[1]["y"]]]
+                        cam_cfg["end_line"] = [[anchors[2]["x"], anchors[2]["y"]], [anchors[3]["x"], anchors[3]["y"]]]
+                        
+                if v.top_distance_m is not None:
+                    cam_cfg["distance_m"] = v.top_distance_m
+                config_dict["cameras"].append(cam_cfg)
+                
+                meta_data_cameras.append({
                     "camera_index": v.camera_index,
-                    "anchors": json.loads(v.anchors) if v.anchors else None,
+                    "anchors": anchors,
                     "top_distance_m": v.top_distance_m,
                     "bottom_distance_m": v.bottom_distance_m,
                 })
+            
+            meta_data = {
+                "run_session_id": run_session_id,
+                "camera_count": camera_count,
+                "cameras": meta_data_cameras
+            }
             
             with open(os.path.join(folder, "metadata.json"), "w") as f:
                 json.dump(meta_data, f, indent=4)
 
             # 2️⃣ 執行分析
-            raw_data = await asyncio.to_thread(track_and_draw, folder, "analyzed_video", camera_count, progress_callback)
+            raw_data = await asyncio.to_thread(
+                run_analysis,
+                config_dict=config_dict,
+                gpu="0",
+                only_2d=False,
+                skip_track=False,
+                output_dest=folder,
+                progress_callback=progress_callback
+            )
+
+            metrics_csv = raw_data.get("metrics_csv") if raw_data else None
+            total_time = raw_data.get("total_time") if raw_data else None
+            avg_velocity = raw_data.get("avg_velocity") if raw_data else None
+            avg_acceleration = raw_data.get("avg_acceleration") if raw_data else None
+            avg_step_length = raw_data.get("avg_step_length") if raw_data else None
 
             # 2️⃣ 將 raw_data 寫入資料庫
             analysis_meta = AnalysisMeta(
                 run_session_id=UUID(run_session_id),
-                total_time=raw_data.get("total_time", 0),
-                avg_velocity=raw_data.get("avg_velocity", 0),
-                avg_acceleration=raw_data.get("avg_acceleration", 0),
-                avg_step_length=raw_data.get("avg_step_length", 0),
-                summary=raw_data.get("summary", {})
+                total_time=total_time,
+                avg_velocity=avg_velocity,
+                avg_acceleration=avg_acceleration,
+                avg_step_length=avg_step_length,
+                summary={
+                    "metrics_csv": raw_data.get("metrics_csv") if raw_data else None,
+                    "angles_csv": raw_data.get("angles_csv") if raw_data else None,
+                    "uncropped_video": raw_data.get("uncropped_video") if raw_data else None
+                }
             )
             session.add(analysis_meta)
             run_session = await session.get(RunSession, UUID(run_session_id)) # 重新取得以確保狀態正確

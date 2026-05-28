@@ -14,10 +14,10 @@ class AnalysisMeta(SQLModel, table=True):
         primary_key=True
     )
 
-    total_time: float = Field()
-    avg_velocity: float = Field()
-    avg_acceleration: float = Field()
-    avg_step_length: float = Field()
+    total_time: Optional[float] = Field(default=None)
+    avg_velocity: Optional[float] = Field(default=None)
+    avg_acceleration: Optional[float] = Field(default=None)
+    avg_step_length: Optional[float] = Field(default=None)
 
     summary: Optional[Dict] = Field(
         sa_column=Column(JSON),
