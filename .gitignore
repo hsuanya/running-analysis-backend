@@ -3,3 +3,6 @@ model/
 __pycache__/
 .vscode/
 *.db
+*.db.bak
+*.log
+*.bak_*

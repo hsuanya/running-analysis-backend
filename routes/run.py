@@ -1,24 +1,30 @@
-import os
 from uuid import UUID
+from pathlib import Path
+from html import escape
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+import numpy as np
+import pandas as pd
+
+from config import RUN_SESSION_DIR, TEMP_UPLOAD_DIR
 from db.session import get_session
 from db_models import Runner, RunSession
-from response_chemas import GraphDataOut, GraphSeriesOut, RunnerInfoOut, AddRunnerIn, RunSessionInfoOut, UnanalyzedRunSessionInfoOut
-import pandas as pd
-import numpy as np
-from fastapi.responses import FileResponse
+from response_chemas import (
+    AddRunnerIn,
+    AnglesOut,
+    GraphOut,
+    RunnerInfoOut,
+    RunSessionInfoOut,
+    UnanalyzedRunSessionInfoOut,
+)
+
 
 router = APIRouter()
 
-# 暫存區
-TEMP_UPLOAD_DIR = "/home/hsuanya/workspace/running_analysis/backend/data/uploads_temp"
-os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
-# 正式資料夾根目錄
-RUN_SESSION_DIR = "/home/hsuanya/workspace/running_analysis/backend/data/run_sessions"
-os.makedirs(RUN_SESSION_DIR, exist_ok=True)
 
 @router.get("/runner", response_model=list[RunnerInfoOut])
 async def get_runners(session: AsyncSession = Depends(get_session)) -> list[RunnerInfoOut]:
@@ -40,15 +46,16 @@ async def get_runners(session: AsyncSession = Depends(get_session)) -> list[Runn
             RunnerInfoOut(
                 id=runner.id,
                 name=runner.name,
-                lastVideoId=last_run.id if last_run else None
+                lastVideoId=last_run.id if last_run else None,
             )
         )
     return result
 
+
 @router.post("/runner")
 async def add_runner(
     data: AddRunnerIn,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     runner = Runner(name=data.name)
     session.add(runner)
@@ -56,13 +63,14 @@ async def add_runner(
     await session.refresh(runner)
     return {"id": str(runner.id)}
 
+
 @router.get(
     "/runner/{runner_id}/run_sessions",
-    response_model=list[RunSessionInfoOut]
+    response_model=list[RunSessionInfoOut],
 )
 async def get_runner_run_sessions(
     runner_id: UUID,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ) -> list[RunSessionInfoOut]:
     runs = (await session.execute(
         select(RunSession)
@@ -90,18 +98,19 @@ async def get_runner_run_sessions(
                 avgStepLength=round(run.analysis.avg_step_length, 3) if run.analysis and run.analysis.avg_step_length is not None else None,
                 totalTime=round(run.analysis.total_time, 3) if run.analysis and run.analysis.total_time is not None else None,
                 status=run.status,
-                progress=run.progress
+                progress=run.progress,
             )
         )
     return result
 
+
 @router.get(
     "/runner/{runner_id}/run_sessions/unanalyzed",
-    response_model=list[UnanalyzedRunSessionInfoOut]
+    response_model=list[UnanalyzedRunSessionInfoOut],
 )
 async def get_unanalyzed_run_sessions(
     runner_id: UUID,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ) -> list[UnanalyzedRunSessionInfoOut]:
     runs = (await session.execute(
         select(RunSession)
@@ -128,10 +137,11 @@ async def get_unanalyzed_run_sessions(
                 fps=run.fps,
                 note=run.note,
                 unuploadedCameraIndexes=missing,
-                videoPaths=[v.video_path if v else None for v in run.videos]
+                videoPaths=[v.video_path if v else None for v in run.videos],
             )
         )
     return result
+
 
 @router.get("/run_session/{run_session_id}")
 async def get_run_session_info(run_session_id: UUID, session: AsyncSession = Depends(get_session)) -> RunSessionInfoOut:
@@ -146,7 +156,7 @@ async def get_run_session_info(run_session_id: UUID, session: AsyncSession = Dep
     if not run_session:
         raise HTTPException(status_code=404, detail="Run session not found")
 
-    if run_session.status != "done":
+    if run_session.status != "done" or run_session.analysis is None:
         return RunSessionInfoOut(
             runSessionId=run_session_id,
             runnerId=run_session.runner_id,
@@ -156,7 +166,7 @@ async def get_run_session_info(run_session_id: UUID, session: AsyncSession = Dep
             fps=run_session.fps,
             note=run_session.note,
             status=run_session.status,
-            progress=run_session.progress
+            progress=run_session.progress,
         )
 
     analysis = run_session.analysis
@@ -173,8 +183,21 @@ async def get_run_session_info(run_session_id: UUID, session: AsyncSession = Dep
         totalTime=round(analysis.total_time, 3) if analysis.total_time is not None else None,
         avgVelocity=round(analysis.avg_velocity, 3) if analysis.avg_velocity is not None else None,
         avgAcceleration=round(analysis.avg_acceleration, 3) if analysis.avg_acceleration is not None else None,
-        avgStepLength=round(analysis.avg_step_length, 3) if analysis.avg_step_length is not None else None
+        avgStepLength=round(analysis.avg_step_length, 3) if analysis.avg_step_length is not None else None,
     )
+
+
+def _finite_xy(df: pd.DataFrame, x_col: str, y_col: str) -> tuple[list[float], list[float]]:
+    cleaned = df[[x_col, y_col]].replace([np.inf, -np.inf], np.nan).dropna()
+    return cleaned[x_col].astype(float).tolist(), cleaned[y_col].astype(float).tolist()
+
+
+def _sample(values: list[float], max_points: int) -> list[float]:
+    if len(values) <= max_points:
+        return values
+    step = max(1, len(values) // max_points)
+    return values[::step]
+
 
 def build_graph(
     df: pd.DataFrame,
@@ -183,142 +206,529 @@ def build_graph(
     title: str,
     y_label: str,
     category: str = "metrics",
-    max_points: int = 200
+    max_points: int = 200,
 ):
-    x = df[x_col].tolist()
-    y = df[y_col].tolist()
+    x, y = _finite_xy(df, x_col, y_col)
+    x = _sample(x, max_points)
+    y = _sample(y, max_points)
 
-    if len(x) > max_points:
-        step = len(x) // max_points
-        x = x[::step]
-        y = y[::step]
+    if not y:
+        x = [0.0]
+        y = [0.0]
 
     return {
         "title": title,
         "yLabel": y_label,
         "x": x,
-        "series": [{"name": "main", "y": y}],
         "yMin": float(np.min(y)),
         "yMax": float(np.max(y)),
+        "series": [{"name": "main", "y": y}],
         "category": category,
     }
 
 
-def build_paired_graph(
+def build_multi_graph(
     df: pd.DataFrame,
     x_col: str,
-    left_col: str,
-    right_col: str,
+    columns: list[str],
     title: str,
     y_label: str,
-    max_points: int = 200
+    category: str = "angles",
+    max_points: int = 200,
 ):
-    """Build a graph with two series (left / right) sharing the same x-axis."""
-    x      = df[x_col].tolist()
-    left_y = df[left_col].tolist()
-    right_y = df[right_col].tolist()
+    cleaned = df[[x_col] + columns].replace([np.inf, -np.inf], np.nan).dropna(subset=[x_col])
+    x = _sample(cleaned[x_col].astype(float).tolist(), max_points)
+    series = []
+    all_y = []
 
-    if len(x) > max_points:
-        step = len(x) // max_points
-        x       = x[::step]
-        left_y  = left_y[::step]
-        right_y = right_y[::step]
+    for col in columns:
+        y = cleaned[col].fillna(0).astype(float).tolist()
+        y = _sample(y, max_points)
+        series.append({"name": col.replace("_angle", "").replace("_", " "), "y": y})
+        all_y.extend(y)
 
-    all_y = left_y + right_y
+    if not all_y:
+        x = [0.0]
+        all_y = [0.0]
+
     return {
         "title": title,
         "yLabel": y_label,
         "x": x,
-        "series": [
-            {"name": "left",  "y": left_y},
-            {"name": "right", "y": right_y},
-        ],
         "yMin": float(np.min(all_y)),
         "yMax": float(np.max(all_y)),
-        "category": "angles",
+        "series": series,
+        "category": category,
     }
+
+
+def _first_existing(paths: list[Path]) -> Path | None:
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+async def _get_run_session(
+    run_session_id: UUID,
+    session: AsyncSession,
+    load_analysis: bool = False,
+) -> RunSession:
+    query = select(RunSession).where(RunSession.id == run_session_id)
+    if load_analysis:
+        query = query.options(
+            selectinload(RunSession.runner),
+            selectinload(RunSession.analysis),
+        )
+    run_session = (await session.execute(query)).scalars().first()
+    if not run_session:
+        raise HTTPException(status_code=404, detail="Run session not found")
+    return run_session
+
+
+def _session_dir(run_session: RunSession) -> Path:
+    if run_session.result_dir:
+        result_dir = Path(run_session.result_dir)
+        if result_dir.exists():
+            return result_dir
+    return RUN_SESSION_DIR / str(run_session.runner_id) / str(run_session.id)
+
+
+def _analysis_csvs(run_session: RunSession) -> tuple[Path | None, Path | None]:
+    session_dir = _session_dir(run_session)
+    metrics_csv = _first_existing(
+        [
+            session_dir / "metrics.csv",
+            session_dir / "tracking_results" / "run_metrics.csv",
+        ]
+    )
+    angles_csv = _first_existing(
+        [
+            session_dir / "angles.csv",
+            session_dir / "tracking_results" / "joint_angles.csv",
+        ]
+    )
+    return metrics_csv, angles_csv
+
+
+def _with_time_column(df: pd.DataFrame, fps: int) -> pd.DataFrame:
+    if "time_sec" not in df.columns:
+        if "time_s" in df.columns:
+            df["time_sec"] = df["time_s"]
+        elif "absolute_frame" in df.columns:
+            df["time_sec"] = df["absolute_frame"] / (fps or 60)
+        elif "frame" in df.columns:
+            df["time_sec"] = df["frame"] / (fps or 60)
+    if "time_s" not in df.columns and "time_sec" in df.columns:
+        df["time_s"] = df["time_sec"]
+    if "time_sec" in df.columns:
+        df = df.sort_values("time_sec")
+    return df
+
 
 @router.get(
     "/run_session/{run_session_id}/graphs",
-    response_model=list[GraphDataOut]
+    response_model=list[GraphOut],
 )
 async def get_run_session_graphs(run_session_id: UUID, session: AsyncSession = Depends(get_session)):
-    run_session = (await session.execute(
-        select(RunSession)
-        .where(RunSession.id == run_session_id)
-    )).scalars().first()
-    if not run_session:
-        raise HTTPException(status_code=404, detail="Run session not found")
-
-    results_dir = os.path.join(RUN_SESSION_DIR, str(run_session.runner_id), str(run_session_id))
+    run_session = await _get_run_session(run_session_id, session)
     graphs = []
+    metrics_csv, angles_csv = _analysis_csvs(run_session)
 
-    # ━━ 追蹤指標（3 張）━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    metrics_path = os.path.join(results_dir, "metrics.csv")
-    if not os.path.exists(metrics_path):
-        metrics_path = os.path.join(results_dir, "tracking_results", "run_metrics.csv")
-
-    if os.path.exists(metrics_path):
-        df = pd.read_csv(metrics_path)
-        if "time_s" not in df.columns:
-            if "absolute_frame" in df.columns:
-                df["time_s"] = df["absolute_frame"] / (run_session.fps or 60.0)
-            elif "frame" in df.columns:
-                df["time_s"] = df["frame"] / (run_session.fps or 60.0)
-        
-        if "time_s" in df.columns:
-            df = df.sort_values("time_s")
-
+    if metrics_csv:
+        df = _with_time_column(pd.read_csv(metrics_csv), run_session.fps)
         for y_col, title, ylabel in [
-            ("dist_m",    "Distance",     "Distance (m)"),
-            ("speed_mps", "Velocity",     "Velocity (m/s)"),
-            ("accel_mps2","Acceleration", "Acceleration (m/s\u00b2)"),
+            ("dist_smooth_m" if "dist_smooth_m" in df.columns else "dist_m", "Distance", "Distance (m)"),
+            ("speed_mps", "Velocity", "Velocity (m/s)"),
+            ("accel_mps2", "Acceleration", "Acceleration (m/s²)"),
         ]:
-            if y_col in df.columns:
-                graphs.append(build_graph(df, x_col="time_s", y_col=y_col,
-                                          title=title, y_label=ylabel,
-                                          category="metrics"))
+            if "time_sec" in df.columns and y_col in df.columns:
+                graphs.append(
+                    build_graph(
+                        df,
+                        x_col="time_sec",
+                        y_col=y_col,
+                        title=title,
+                        y_label=ylabel,
+                    )
+                )
 
-    # ━━ 關節角度（3 對 + 1 單）━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    angles_path = os.path.join(results_dir, "angles.csv")
-    if not os.path.exists(angles_path):
-        angles_path = os.path.join(results_dir, "tracking_results", "joint_angles.csv")
+    if angles_csv:
+        df = _with_time_column(pd.read_csv(angles_csv), run_session.fps)
+        if "time_sec" in df.columns:
+            angle_groups = [
+                ("Knee Angle", "Angle (deg)", ["left_knee_angle", "right_knee_angle"]),
+                ("Hip Angle", "Angle (deg)", ["left_hip_angle", "right_hip_angle"]),
+                ("Elbow Flexion", "Angle (deg)", ["left_elbow_flexion_angle", "right_elbow_flexion_angle"]),
+                ("Shoulder Flexion", "Angle (deg)", ["left_shoulder_flexion", "right_shoulder_flexion"]),
+                ("Pelvis Torso Angle", "Angle (deg)", ["pelvis_torso_angle"]),
+            ]
 
-    if os.path.exists(angles_path):
-        adf = pd.read_csv(angles_path)
-        if "time_s" not in adf.columns:
-            if "absolute_frame" in adf.columns:
-                adf["time_s"] = adf["absolute_frame"] / (run_session.fps or 60.0)
-            elif "frame" in adf.columns:
-                adf["time_s"] = adf["frame"] / (run_session.fps or 60.0)
+            for title, y_label, columns in angle_groups:
+                available = [c for c in columns if c in df.columns]
+                if available:
+                    graphs.append(build_multi_graph(df, "time_sec", available, title, y_label))
 
-        if "time_s" in adf.columns:
-            adf = adf.sort_values("time_s")
+    if not graphs:
+        raise HTTPException(status_code=404, detail="Analysis graph files not found")
 
-        # Paired: left + right on the same chart
-        paired_cols = [
-            ("left_knee_angle",          "right_knee_angle",         "Knee Angle",    "Angle (deg)"),
-            ("left_hip_angle",           "right_hip_angle",          "Hip Angle",     "Angle (deg)"),
-            ("left_elbow_flexion_angle", "right_elbow_flexion_angle","Elbow Flexion", "Angle (deg)"),
-        ]
-        for left_col, right_col, title, ylabel in paired_cols:
-            if left_col in adf.columns and right_col in adf.columns:
-                graphs.append(build_paired_graph(
-                    adf, x_col="time_s",
-                    left_col=left_col, right_col=right_col,
-                    title=title, y_label=ylabel,
-                ))
-
-        # Single: standalone chart
-        single_cols = [
-            ("pelvis_torso_angle", "Pelvis-Torso Angle", "Angle (deg)"),
-        ]
-        for y_col, title, ylabel in single_cols:
-            if y_col in adf.columns:
-                graphs.append(build_graph(adf, x_col="time_s", y_col=y_col,
-                                          title=title, y_label=ylabel,
-                                          category="angles"))
     return graphs
+
+
+@router.get(
+    "/run_session/{run_session_id}/angles",
+    response_model=AnglesOut,
+)
+async def get_run_session_angles(run_session_id: UUID, session: AsyncSession = Depends(get_session)):
+    run_session = await _get_run_session(run_session_id, session)
+    _, angles_csv = _analysis_csvs(run_session)
+    if not angles_csv:
+        raise HTTPException(status_code=404, detail="Angle file not found")
+
+    df = _with_time_column(pd.read_csv(angles_csv), run_session.fps)
+    if "frame" not in df.columns or "time_sec" not in df.columns:
+        raise HTTPException(status_code=422, detail="Angle file lacks frame/time columns")
+
+    columns = [
+        col for col in df.columns
+        if col not in {"frame", "time_sec", "time_s"}
+    ]
+    samples = []
+    cleaned = df.replace([np.inf, -np.inf], np.nan)
+    for _, row in cleaned.iterrows():
+        values = {}
+        for col in columns:
+            value = row[col]
+            values[col] = None if pd.isna(value) else float(value)
+        samples.append({
+            "frame": int(row["frame"]),
+            "timeSec": float(row["time_sec"]),
+            "values": values,
+        })
+
+    return {"columns": columns, "samples": samples}
+
+
+@router.get("/run_session/{run_session_id}/angles.csv")
+async def download_run_session_angles_csv(
+    run_session_id: UUID,
+    session: AsyncSession = Depends(get_session),
+) -> FileResponse:
+    run_session = await _get_run_session(run_session_id, session)
+    _, angles_csv = _analysis_csvs(run_session)
+    if not angles_csv:
+        raise HTTPException(status_code=404, detail="Angle file not found")
+
+    return FileResponse(
+        angles_csv,
+        media_type="text/csv; charset=utf-8",
+        filename=f"angles_{run_session_id}.csv",
+    )
+
+
+def _format_value(value, unit: str = "") -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.3f}{unit}"
+    return f"{value}{unit}"
+
+
+def _summary_metric(label: str, value: str) -> str:
+    return f"""
+      <div class="metric">
+        <div class="label">{escape(label)}</div>
+        <div class="value">{escape(value)}</div>
+      </div>
+    """
+
+
+def _svg_line_chart(
+    series: list[tuple[str, list[float], list[float], str]],
+    width: int = 700,
+    height: int = 220,
+    x_label: str = "Time (s)",
+    y_label: str = "",
+) -> str:
+    pad = {"top": 28, "right": 24, "bottom": 44, "left": 56}
+    all_x = [v for _, x, y, _ in series for v in x]
+    all_y = [v for _, x, y, _ in series for v in y]
+    if not all_x or not all_y:
+        return ""
+    x_min, x_max = min(all_x), max(all_x)
+    y_min, y_max = min(all_y), max(all_y)
+    if x_max == x_min:
+        x_max = x_min + 1
+    if y_max == y_min:
+        y_min -= 1
+        y_max += 1
+    pw = width - pad["left"] - pad["right"]
+    ph = height - pad["top"] - pad["bottom"]
+    sx = lambda v: pad["left"] + (v - x_min) / (x_max - x_min) * pw
+    sy = lambda v: pad["top"] + (1 - (v - y_min) / (y_max - y_min)) * ph
+    lines = ""
+    for name, x, y, color in series:
+        if not x:
+            continue
+        pts = " ".join(f"{sx(xi):.1f},{sy(yi):.1f}" for xi, yi in zip(x, y))
+        lines += f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2" stroke-linejoin="round"/>\n'
+    grid = ""
+    for i in range(5):
+        v = y_min + (y_max - y_min) * i / 4
+        vy = sy(v)
+        grid += f'<line x1="{pad["left"]}" y1="{vy:.1f}" x2="{pad["left"] + pw}" y2="{vy:.1f}" stroke="#eee" stroke-width="1"/>\n'
+        grid += f'<text x="{pad["left"] - 6}" y="{vy:.1f}" text-anchor="end" dominant-baseline="middle" font-size="10" fill="#888">{v:.1f}</text>\n'
+    xticks = ""
+    n = min(8, max(2, int(x_max - x_min)))
+    for i in range(n + 1):
+        v = x_min + (x_max - x_min) * i / n
+        vx = sx(v)
+        xticks += f'<text x="{vx:.1f}" y="{pad["top"] + ph + 14}" text-anchor="middle" font-size="10" fill="#888">{v:.1f}</text>\n'
+    legend = ""
+    for i, (name, _, _, color) in enumerate(series):
+        lx = pad["left"] + i * 130
+        legend += f'<rect x="{lx}" y="{pad["top"] - 18}" width="18" height="3" rx="1" fill="{color}"/>\n'
+        legend += f'<text x="{lx + 22}" y="{pad["top"] - 12}" font-size="11" fill="#444">{escape(name)}</text>\n'
+    mid_x = pad["left"] + pw / 2
+    mid_y = pad["top"] + ph / 2
+    return (
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto">\n'
+        f'{grid}{lines}{xticks}{legend}'
+        f'<line x1="{pad["left"]}" y1="{pad["top"]}" x2="{pad["left"]}" y2="{pad["top"] + ph}" stroke="#ccc" stroke-width="1.5"/>\n'
+        f'<line x1="{pad["left"]}" y1="{pad["top"] + ph}" x2="{pad["left"] + pw}" y2="{pad["top"] + ph}" stroke="#ccc" stroke-width="1.5"/>\n'
+        f'<text x="{mid_x:.1f}" y="{height - 4}" text-anchor="middle" font-size="11" fill="#888">{escape(x_label)}</text>\n'
+        f'<text x="12" y="{mid_y:.1f}" text-anchor="middle" font-size="11" fill="#888" '
+        f'transform="rotate(-90,12,{mid_y:.1f})">{escape(y_label)}</text>\n'
+        f'</svg>'
+    )
+
+
+def _chart_section(title: str, svg: str, stats: list[tuple[str, str]]) -> str:
+    if not svg:
+        return ""
+    stats_items = "".join(
+        f'<div class="cstat"><div class="cstat-label">{escape(label)}</div>'
+        f'<div class="cstat-value">{escape(value)}</div></div>'
+        for label, value in stats
+    )
+    stats_block = f'<div class="cstat-row">{stats_items}</div>' if stats_items else ""
+    return f"""
+    <section class="chart-section">
+      <h2>{escape(title)}</h2>
+      <div class="chart-wrap">{svg}</div>
+      {stats_block}
+    </section>
+    """
+
+
+def _build_report_html(
+    run_session: RunSession,
+    metrics_csv: Path | None,
+    angles_csv: Path | None,
+) -> str:
+    analysis = run_session.analysis
+    runner_name = run_session.runner.name if run_session.runner else "-"
+
+    charts_html = ""
+
+    if metrics_csv:
+        try:
+            df = _with_time_column(pd.read_csv(metrics_csv), run_session.fps)
+            df = df.replace([np.inf, -np.inf], np.nan)
+            if "time_sec" in df.columns:
+                x = _sample(df["time_sec"].tolist(), 300)
+
+                dist_col = next((c for c in ("dist_smooth_m", "dist_m") if c in df.columns), None)
+                if dist_col:
+                    y = _sample(df[dist_col].fillna(0).tolist(), 300)
+                    col_data = df[dist_col].dropna()
+                    charts_html += _chart_section(
+                        "Distance",
+                        _svg_line_chart([("Distance", x, y, "#6366f1")], y_label="m"),
+                        stats=[("Total", f"{col_data.max():.2f} m")] if not col_data.empty else [],
+                    )
+
+                if "speed_mps" in df.columns:
+                    col_data = df["speed_mps"].dropna()
+                    y = _sample(df["speed_mps"].fillna(0).tolist(), 300)
+                    charts_html += _chart_section(
+                        "Velocity",
+                        _svg_line_chart([("Velocity", x, y, "#0ea5e9")], y_label="m/s"),
+                        stats=[
+                            ("Average", f"{col_data.mean():.3f} m/s"),
+                            ("Max", f"{col_data.max():.3f} m/s"),
+                            ("Min", f"{col_data.min():.3f} m/s"),
+                        ] if not col_data.empty else [],
+                    )
+
+                if "accel_mps2" in df.columns:
+                    col_data = df["accel_mps2"].dropna()
+                    y = _sample(df["accel_mps2"].fillna(0).tolist(), 300)
+                    charts_html += _chart_section(
+                        "Acceleration",
+                        _svg_line_chart([("Acceleration", x, y, "#f97316")], y_label="m/s²"),
+                        stats=[
+                            ("Average", f"{col_data.mean():.3f} m/s²"),
+                            ("Max", f"{col_data.max():.3f} m/s²"),
+                            ("Min", f"{col_data.min():.3f} m/s²"),
+                        ] if not col_data.empty else [],
+                    )
+        except Exception as e:
+            print(f"[report] metrics chart error: {e}")
+
+    if angles_csv:
+        try:
+            df = _with_time_column(pd.read_csv(angles_csv), run_session.fps)
+            df = df.replace([np.inf, -np.inf], np.nan)
+            if "time_sec" in df.columns:
+                x = _sample(df["time_sec"].tolist(), 300)
+                angle_groups = [
+                    ("Knee Angle", [("left_knee_angle", "Left", "#0ea5e9"), ("right_knee_angle", "Right", "#f97316")]),
+                    ("Hip Angle", [("left_hip_angle", "Left", "#0ea5e9"), ("right_hip_angle", "Right", "#f97316")]),
+                    ("Elbow Flexion", [("left_elbow_flexion_angle", "Left", "#0ea5e9"), ("right_elbow_flexion_angle", "Right", "#f97316")]),
+                    ("Shoulder Flexion", [("left_shoulder_flexion", "Left", "#0ea5e9"), ("right_shoulder_flexion", "Right", "#f97316")]),
+                    ("Pelvis Torso Angle", [("pelvis_torso_angle", "Pelvis-Torso", "#22c55e")]),
+                ]
+                for title, col_defs in angle_groups:
+                    available = [(col, label, color) for col, label, color in col_defs if col in df.columns]
+                    if not available:
+                        continue
+                    series = []
+                    stats = []
+                    for col, label, color in available:
+                        y = _sample(df[col].fillna(0).tolist(), 300)
+                        series.append((label, x, y, color))
+                        col_data = df[col].dropna()
+                        if not col_data.empty:
+                            stats += [
+                                (f"{label} Avg", f"{col_data.mean():.1f}°"),
+                                (f"{label} Max", f"{col_data.max():.1f}°"),
+                                (f"{label} Min", f"{col_data.min():.1f}°"),
+                            ]
+                    charts_html += _chart_section(
+                        title,
+                        _svg_line_chart(series, y_label="deg"),
+                        stats=stats,
+                    )
+        except Exception as e:
+            print(f"[report] angles chart error: {e}")
+
+    summary_metrics = [
+        ("Runner", runner_name),
+        ("Date", run_session.date.isoformat(sep=" ", timespec="seconds")),
+        ("Status", run_session.status),
+        ("FPS", str(run_session.fps)),
+        ("Camera Count", str(run_session.camera_count)),
+        ("Total Time", _format_value(analysis.total_time if analysis else None, " s")),
+        ("Avg Velocity", _format_value(analysis.avg_velocity if analysis else None, " m/s")),
+        ("Avg Acceleration", _format_value(analysis.avg_acceleration if analysis else None, " m/s²")),
+        ("Avg Step Length", _format_value(analysis.avg_step_length if analysis else None, " m")),
+        ("Note", run_session.note or "-"),
+    ]
+    summary_html = "".join(_summary_metric(label, value) for label, value in summary_metrics)
+
+    return f"""<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>Runner Analysis Report</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: #f4f6f8;
+      color: #17212b;
+      font-family: Arial, "Noto Sans TC", sans-serif;
+      line-height: 1.5;
+    }}
+    .page {{
+      max-width: 1040px;
+      margin: 24px auto;
+      background: #fff;
+      padding: 40px;
+      box-shadow: 0 8px 30px rgba(24, 34, 45, 0.12);
+    }}
+    h1 {{ margin: 0 0 6px; font-size: 30px; }}
+    h2 {{
+      margin: 0 0 14px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #d9e1ea;
+      font-size: 18px;
+    }}
+    .subtle {{ color: #647487; font-size: 13px; }}
+    .summary {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 12px;
+      margin: 24px 0 32px;
+    }}
+    .metric {{
+      border: 1px solid #dce4ed;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfe;
+    }}
+    .label {{ color: #65758a; font-size: 12px; margin-bottom: 5px; }}
+    .value {{ font-size: 19px; font-weight: 700; word-break: break-word; }}
+    .chart-section {{ margin: 32px 0; }}
+    .chart-wrap {{
+      overflow-x: auto;
+      background: #fafbfc;
+      border: 1px solid #e8edf2;
+      border-radius: 8px;
+      padding: 12px;
+    }}
+    .cstat-row {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }}
+    .cstat {{
+      background: #f3f6fa;
+      border: 1px solid #dce4ed;
+      border-radius: 6px;
+      padding: 8px 14px;
+      min-width: 110px;
+    }}
+    .cstat-label {{ color: #65758a; font-size: 11px; }}
+    .cstat-value {{ font-size: 16px; font-weight: 700; }}
+    @media print {{
+      body {{ background: #fff; }}
+      .page {{ margin: 0; box-shadow: none; max-width: none; }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>Runner Analysis Report</h1>
+    <div class="subtle">Session: {escape(str(run_session.id))}</div>
+    <div class="summary">{summary_html}</div>
+    {charts_html if charts_html else "<p>No analysis data available.</p>"}
+  </main>
+</body>
+</html>"""
+
+
+@router.get("/run_session/{run_session_id}/report")
+async def download_run_session_report(
+    run_session_id: UUID,
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    run_session = await _get_run_session(run_session_id, session, load_analysis=True)
+    metrics_csv, angles_csv = _analysis_csvs(run_session)
+    if not metrics_csv and not angles_csv:
+        raise HTTPException(status_code=404, detail="Analysis files not found")
+
+    html = _build_report_html(run_session, metrics_csv, angles_csv)
+    return HTMLResponse(
+        content=html,
+        headers={
+            "Content-Disposition": f'attachment; filename="running_report_{run_session_id}.html"'
+        },
+    )
+
 
 @router.get("/run_session/{run_session_id}/video")
 async def get_run_session_video(run_session_id: UUID, session: AsyncSession = Depends(get_session)) -> FileResponse:
@@ -327,32 +737,37 @@ async def get_run_session_video(run_session_id: UUID, session: AsyncSession = De
         .options(selectinload(RunSession.analysis))
         .where(RunSession.id == run_session_id)
     )).scalars().first()
-
     if not run_session:
         raise HTTPException(status_code=404, detail="Run session not found")
 
     video_path = None
-    if run_session.analysis and run_session.analysis.summary:
-        if isinstance(run_session.analysis.summary, dict):
-            video_path = run_session.analysis.summary.get("uncropped_video")
+    if run_session.analysis and isinstance(run_session.analysis.summary, dict):
+        summary_video = run_session.analysis.summary.get("uncropped_video")
+        if summary_video and Path(summary_video).exists():
+            video_path = Path(summary_video)
 
-    if not video_path or not os.path.exists(video_path):
-        results_dir = os.path.join(RUN_SESSION_DIR, str(run_session.runner_id), str(run_session_id))
-        import glob
-        matches = glob.glob(os.path.join(results_dir, "*_uncropped_2D.mp4"))
-        if matches:
-            video_path = matches[0]
-        else:
-            video_path = os.path.join(results_dir, "sequential_tracked.mp4")
-            if not os.path.exists(video_path):
-                video_path = os.path.join(results_dir, "tracking_results", "output_final.mp4")
+    session_dir = RUN_SESSION_DIR / str(run_session.runner_id) / str(run_session_id)
+    if video_path is None:
+        video_path = _first_existing(
+            [
+                session_dir / "sequential_tracked.mp4",
+                session_dir / "output_final.mp4",
+                session_dir / "cam1_uncropped_2D.mp4",
+                session_dir / "tracking_results" / "output_final.mp4",
+                session_dir / "tracking_results" / "analyzed_video_meta.mp4",
+            ]
+        )
 
-    if not video_path or not os.path.exists(video_path):
-        raise HTTPException(status_code=404, detail="Video not found")
+    if video_path is None:
+        uncropped_matches = sorted(session_dir.glob("*_uncropped_2D.mp4"))
+        video_path = uncropped_matches[0] if uncropped_matches else None
+
+    if video_path is None:
+        raise HTTPException(status_code=404, detail="Analysis video not found")
 
     return FileResponse(video_path)
 
 
 @router.get("/temp_video/{temp_video_id}/thumbnail")
 def get_thumbnail(temp_video_id: str):
-    return FileResponse(f"{TEMP_UPLOAD_DIR}/{temp_video_id}.jpg")
+    return FileResponse(TEMP_UPLOAD_DIR / f"{temp_video_id}.jpg")

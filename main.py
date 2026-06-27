@@ -4,8 +4,12 @@ from routes.run import router as run_router
 from routes.upload import router as upload_router
 from routes.record import router as record_router
 from db.init_db import init_db
+from config import API_PREFIX
 
-app = FastAPI(root_path="/running_analysis/api")
+app = FastAPI(
+    docs_url=f"{API_PREFIX}/docs",
+    openapi_url=f"{API_PREFIX}/openapi.json",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,9 +19,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(run_router)
-app.include_router(upload_router)
-app.include_router(record_router)
+app.include_router(run_router, prefix=API_PREFIX)
+app.include_router(upload_router, prefix=API_PREFIX)
+app.include_router(record_router, prefix=API_PREFIX)
 
 @app.on_event("startup")
 async def on_startup():

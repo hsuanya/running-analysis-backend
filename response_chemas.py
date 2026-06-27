@@ -1,15 +1,19 @@
-from pydantic import BaseModel
+from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime
+
+from pydantic import BaseModel
+
 
 class RunnerInfoOut(BaseModel):
     id: UUID
     name: str
     lastVideoId: Optional[UUID]
 
+
 class AddRunnerIn(BaseModel):
     name: str
+
 
 class RunSessionInfoOut(BaseModel):
     runSessionId: UUID
@@ -26,6 +30,7 @@ class RunSessionInfoOut(BaseModel):
     status: str
     progress: int = 0
 
+
 class UnanalyzedRunSessionInfoOut(BaseModel):
     runSessionId: UUID
     runnerId: UUID
@@ -37,31 +42,48 @@ class UnanalyzedRunSessionInfoOut(BaseModel):
     unuploadedCameraIndexes: List[int]
     videoPaths: List[Optional[str]]
 
-class GraphSeriesOut(BaseModel):
-    name: str          # e.g. "main", "left", "right"
-    y: list[float]
 
 class GraphDataOut(BaseModel):
+    name: str
+    y: list[float]
+
+
+class GraphOut(BaseModel):
     title: str
     yLabel: str
     yMin: float
     yMax: float
-    x: list[float]          # shared x-axis for all series
-    series: list[GraphSeriesOut]
-    category: str           # "metrics" | "angles"
+    x: list[float]
+    series: list[GraphDataOut]
+    category: str = "metrics"
 
-class AnchorPoint(BaseModel):
+
+class AngleSampleOut(BaseModel):
+    frame: int
+    timeSec: float
+    values: dict[str, Optional[float]]
+
+
+class AnglesOut(BaseModel):
+    columns: list[str]
+    samples: list[AngleSampleOut]
+
+
+class AnchorPointIn(BaseModel):
     x: float
     y: float
 
-class AnchorResult(BaseModel):
-    points: List[AnchorPoint]
+
+class AnchorResultIn(BaseModel):
+    points: list[AnchorPointIn]
     topDistanceM: float
     bottomDistanceM: float
 
-class VideoUploadInfo(BaseModel):
+
+class UploadVideoInfoIn(BaseModel):
     tempVideoId: str
-    anchors: Optional[AnchorResult] = None
+    anchors: Optional[AnchorResultIn] = None
+
 
 class UploadAllRequest(BaseModel):
     runnerId: str
@@ -69,14 +91,15 @@ class UploadAllRequest(BaseModel):
     fps: int
     cameraCount: int
     note: str
-    # 原本是 tempVideoIds: list[str]，改為包含錨點的物件列表
-    videos: List[VideoUploadInfo]
+    videos: list[UploadVideoInfoIn]
+
 
 class UploadSeperatelyStatus(BaseModel):
     runnerId: str
     runSessionId: str
     isAllUploaded: bool
     unuploadedCameraIndexes: List[int]
+
 
 class UploadSeperatelyNewRequest(BaseModel):
     runnerId: str
@@ -86,11 +109,12 @@ class UploadSeperatelyNewRequest(BaseModel):
     note: str
     cameraIndex: int
     tempVideoId: str
-    anchors: Optional[AnchorResult] = None
+    anchors: Optional[AnchorResultIn] = None
+
 
 class UploadSeperatelySelectRequest(BaseModel):
     runnerId: str
     runSessionId: str
     cameraIndex: int
     tempVideoId: str
-    anchors: Optional[AnchorResult] = None
+    anchors: Optional[AnchorResultIn] = None
