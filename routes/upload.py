@@ -78,7 +78,11 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
             videos = result.scalars().all()
             
             config_dict = {
-                "cameras": []
+                "cameras": [],
+                "auto_crop": True,
+                "tracking_mode": "two_pass",
+                "prescan_enabled": True,
+                "prescan_engine_path": os.path.join(pipeline_dir, "models", "yolo26x_ultralytics_int8.engine"),
             }
             videos_sorted = sorted(videos, key=lambda x: x.camera_index)
             meta_data_cameras = []
