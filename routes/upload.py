@@ -4,7 +4,8 @@ from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.session import get_session, async_session
-from db_models import RunSession, AnalysisMeta, Video
+from db_models import RunSession, AnalysisMeta, Video, User, Runner
+from routes.auth import get_current_user
 import sys
 pipeline_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "runner-analysis-pipeline"))
 if pipeline_dir not in sys.path:
@@ -213,6 +214,7 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
 async def upload_video(
     index: int,
     file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
 ):
     base_id = uuid.uuid4().hex[:8]
     temp_video_id = f"{base_id}_cam{index + 1}"
@@ -248,8 +250,16 @@ async def upload_video(
 @router.post("/upload_all_info")
 async def upload_all_info(
     req: UploadAllRequest,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user)
 ):
+    # Verify runner belongs to current user
+    runner = (await session.execute(
+        select(Runner).where(Runner.id == UUID(req.runnerId)).where(Runner.user_id == current_user.id)
+    )).scalars().first()
+    if not runner:
+        raise HTTPException(status_code=404, detail="Runner not found or unauthorized")
+
     # 建立 RunSession
     runSession = RunSession(
         runner_id=UUID(req.runnerId),
@@ -299,8 +309,16 @@ async def upload_all_info(
 @router.post("/upload_seperately_new")
 async def upload_seperately_new(
     req: UploadSeperatelyNewRequest,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user)
 ) -> UploadSeperatelyStatus:
+    # Verify runner belongs to current user
+    runner = (await session.execute(
+        select(Runner).where(Runner.id == UUID(req.runnerId)).where(Runner.user_id == current_user.id)
+    )).scalars().first()
+    if not runner:
+        raise HTTPException(status_code=404, detail="Runner not found or unauthorized")
+
     # 建立 RunSession
     runSession = RunSession(
         runner_id=UUID(req.runnerId),
@@ -363,8 +381,16 @@ async def upload_seperately_new(
 @router.post("/upload_seperately_select")
 async def upload_seperately_select(
     req: UploadSeperatelySelectRequest,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user)
 ) -> UploadSeperatelyStatus:
+    # Verify runner belongs to current user
+    runner = (await session.execute(
+        select(Runner).where(Runner.id == UUID(req.runnerId)).where(Runner.user_id == current_user.id)
+    )).scalars().first()
+    if not runner:
+        raise HTTPException(status_code=404, detail="Runner not found or unauthorized")
+
     stored_path = move_temp_video_and_del_thumbnail(req.tempVideoId, req.runnerId, req.runSessionId, req.cameraIndex)
     
     # 處理錨點
