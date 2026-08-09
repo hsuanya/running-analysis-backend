@@ -56,8 +56,8 @@ class AnchorPoint(BaseModel):
 
 class AnchorResult(BaseModel):
     points: List[AnchorPoint]
-    topDistanceM: float
-    bottomDistanceM: float
+    leftToMidDistanceM: float
+    midToRightDistanceM: float
 
 class VideoUploadInfo(BaseModel):
     tempVideoId: str

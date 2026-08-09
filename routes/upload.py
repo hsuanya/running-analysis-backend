@@ -92,12 +92,20 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
             for v in videos_sorted:
                 anchors = json.loads(v.anchors) if v.anchors else None
                 cam_cfg = {"video_path": v.video_path}
-                if anchors and len(anchors) == 4:
+                if anchors:
                     cap = cv2.VideoCapture(v.video_path)
+                    w, h = 0, 0
                     if cap.isOpened():
                         w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
                         h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
                         cap.release()
+
+                    if len(anchors) == 6:
+                        # 6-point Homography layout
+                        # We map points to:
+                        # 0: TL, 1: TR, 2: BR, 3: BL, 4: TM, 5: BM
+                        D1 = v.left_to_mid_distance_m or 0.0
+                        D2 = v.mid_to_right_distance_m or 0.0
                         
                         if w > 0 and h > 0:
                             cam_cfg["start_line"] = [
@@ -108,23 +116,65 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                                 [int(anchors[1]["x"] * w), int(anchors[1]["y"] * h)],
                                 [int(anchors[2]["x"] * w), int(anchors[2]["y"] * h)]
                             ]
+                            # 6 points pixels in order matching build_lane_world_points:
+                            # TL, BL, BM, TM, BR, TR
+                            cam_cfg["homography_src_points"] = [
+                                [anchors[0]["x"] * w, anchors[0]["y"] * h],  # TL
+                                [anchors[3]["x"] * w, anchors[3]["y"] * h],  # BL
+                                [anchors[5]["x"] * w, anchors[5]["y"] * h],  # BM
+                                [anchors[4]["x"] * w, anchors[4]["y"] * h],  # TM
+                                [anchors[2]["x"] * w, anchors[2]["y"] * h],  # BR
+                                [anchors[1]["x"] * w, anchors[1]["y"] * h],  # TR
+                            ]
                         else:
                             # Fallback if invalid dimensions
+                            cam_cfg["start_line"] = [[anchors[0]["x"], anchors[0]["y"]], [anchors[3]["x"], anchors[3]["y"]]]
+                            cam_cfg["end_line"] = [[anchors[1]["x"], anchors[1]["y"]], [anchors[2]["x"], anchors[2]["y"]]]
+                            cam_cfg["homography_src_points"] = [
+                                [anchors[0]["x"], anchors[0]["y"]],
+                                [anchors[3]["x"], anchors[3]["y"]],
+                                [anchors[5]["x"], anchors[5]["y"]],
+                                [anchors[4]["x"], anchors[4]["y"]],
+                                [anchors[2]["x"], anchors[2]["y"]],
+                                [anchors[1]["x"], anchors[1]["y"]],
+                            ]
+                        
+                        cam_cfg["homography_dst_world"] = [
+                            [0.0, 1.22],       # TL
+                            [0.0, 0.0],        # BL
+                            [D1, 0.0],         # BM
+                            [D1, 1.22],        # TM
+                            [D1 + D2, 0.0],    # BR
+                            [D1 + D2, 1.22],   # TR
+                        ]
+                        cam_cfg["distance_m"] = D1 + D2
+                    elif len(anchors) == 4:
+                        # Legacy 4-point layout
+                        if w > 0 and h > 0:
+                            cam_cfg["start_line"] = [
+                                [int(anchors[0]["x"] * w), int(anchors[0]["y"] * h)],
+                                [int(anchors[3]["x"] * w), int(anchors[3]["y"] * h)]
+                            ]
+                            cam_cfg["end_line"] = [
+                                [int(anchors[1]["x"] * w), int(anchors[1]["y"] * h)],
+                                [int(anchors[2]["x"] * w), int(anchors[2]["y"] * h)]
+                            ]
+                        else:
+                            # Fallback
                             cam_cfg["start_line"] = [[anchors[0]["x"], anchors[0]["y"]], [anchors[1]["x"], anchors[1]["y"]]]
                             cam_cfg["end_line"] = [[anchors[2]["x"], anchors[2]["y"]], [anchors[3]["x"], anchors[3]["y"]]]
-                    else:
-                        cam_cfg["start_line"] = [[anchors[0]["x"], anchors[0]["y"]], [anchors[1]["x"], anchors[1]["y"]]]
-                        cam_cfg["end_line"] = [[anchors[2]["x"], anchors[2]["y"]], [anchors[3]["x"], anchors[3]["y"]]]
                         
-                if v.top_distance_m is not None:
-                    cam_cfg["distance_m"] = v.top_distance_m
+                        D1 = v.left_to_mid_distance_m or 0.0
+                        D2 = v.mid_to_right_distance_m or 0.0
+                        cam_cfg["distance_m"] = D1 + D2
+
                 config_dict["cameras"].append(cam_cfg)
                 
                 meta_data_cameras.append({
                     "camera_index": v.camera_index,
                     "anchors": anchors,
-                    "top_distance_m": v.top_distance_m,
-                    "bottom_distance_m": v.bottom_distance_m,
+                    "left_to_mid_distance_m": v.left_to_mid_distance_m,
+                    "mid_to_right_distance_m": v.mid_to_right_distance_m,
                 })
             
             meta_data = {
@@ -279,20 +329,20 @@ async def upload_all_info(
         
         # 處理錨點資料
         anchors_json = None
-        top_d = None
-        bot_d = None
+        left_to_mid_d = None
+        mid_to_right_d = None
         if info.anchors:
             anchors_json = json.dumps([p.dict() for p in info.anchors.points])
-            top_d = info.anchors.topDistanceM
-            bot_d = info.anchors.bottomDistanceM
+            left_to_mid_d = info.anchors.leftToMidDistanceM
+            mid_to_right_d = info.anchors.midToRightDistanceM
 
         video = Video(
             run_session_id=runSession.id,
             camera_index=cameraIndex,
             video_path=video_stored_path,
             anchors=anchors_json,
-            top_distance_m=top_d,
-            bottom_distance_m=bot_d
+            left_to_mid_distance_m=left_to_mid_d,
+            mid_to_right_distance_m=mid_to_right_d
         )
         session.add(video)
         await session.commit()
@@ -337,20 +387,20 @@ async def upload_seperately_new(
     
     # 處理錨點
     anchors_json = None
-    top_d = None
-    bot_d = None
+    left_to_mid_d = None
+    mid_to_right_d = None
     if req.anchors:
         anchors_json = json.dumps([p.dict() for p in req.anchors.points])
-        top_d = req.anchors.topDistanceM
-        bot_d = req.anchors.bottomDistanceM
+        left_to_mid_d = req.anchors.leftToMidDistanceM
+        mid_to_right_d = req.anchors.midToRightDistanceM
 
     video = Video(
         run_session_id=runSession.id,
         camera_index=req.cameraIndex,
         video_path=videoStoredPath,
         anchors=anchors_json,
-        top_distance_m=top_d,
-        bottom_distance_m=bot_d
+        left_to_mid_distance_m=left_to_mid_d,
+        mid_to_right_distance_m=mid_to_right_d
     )
     session.add(video)
     await session.commit()
@@ -395,20 +445,20 @@ async def upload_seperately_select(
     
     # 處理錨點
     anchors_json = None
-    top_d = None
-    bot_d = None
+    left_to_mid_d = None
+    mid_to_right_d = None
     if req.anchors:
         anchors_json = json.dumps([p.dict() for p in req.anchors.points])
-        top_d = req.anchors.topDistanceM
-        bot_d = req.anchors.bottomDistanceM
+        left_to_mid_d = req.anchors.leftToMidDistanceM
+        mid_to_right_d = req.anchors.midToRightDistanceM
 
     video = Video(
         run_session_id=UUID(req.runSessionId),
         camera_index=req.cameraIndex,
         video_path=stored_path,
         anchors=anchors_json,
-        top_distance_m=top_d,
-        bottom_distance_m=bot_d
+        left_to_mid_distance_m=left_to_mid_d,
+        mid_to_right_distance_m=mid_to_right_d
     )
     session.add(video)
     await session.commit()

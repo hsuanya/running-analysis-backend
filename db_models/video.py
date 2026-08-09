@@ -22,5 +22,5 @@ class Video(SQLModel, table=True):
     
     # 錨點定位資料 (正規化座標 JSON)
     anchors: Optional[str] = Field(default=None, description="JSON string of 4 anchor points (x, y)")
-    top_distance_m: Optional[float] = Field(default=None, description="Actual distance of top edge")
-    bottom_distance_m: Optional[float] = Field(default=None, description="Actual distance of bottom edge")
+    left_to_mid_distance_m: Optional[float] = Field(default=None, description="Actual distance from left line to middle line")
+    mid_to_right_distance_m: Optional[float] = Field(default=None, description="Actual distance from middle line to right line")
