@@ -16,10 +16,11 @@ from utils.report_generator import generate_pdf_report
 router = APIRouter()
 
 # 暫存區
-TEMP_UPLOAD_DIR = "/home/hsuanya/workspace/running_analysis/backend/data/uploads_temp"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEMP_UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads_temp")
 os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
 # 正式資料夾根目錄
-RUN_SESSION_DIR = "/home/hsuanya/workspace/running_analysis/backend/data/run_sessions"
+RUN_SESSION_DIR = os.path.join(BASE_DIR, "data", "run_sessions")
 os.makedirs(RUN_SESSION_DIR, exist_ok=True)
 
 @router.get("/runner", response_model=list[RunnerInfoOut])
@@ -83,6 +84,7 @@ async def get_runner_run_sessions(
         select(RunSession)
         .where(RunSession.runner_id == runner_id)
         .where(RunSession.status != "pending")
+        .order_by(RunSession.date.desc())
         .options(
             selectinload(RunSession.runner),
             selectinload(RunSession.analysis),
@@ -129,6 +131,7 @@ async def get_unanalyzed_run_sessions(
         select(RunSession)
         .where(RunSession.runner_id == runner_id)
         .where(RunSession.status == "pending")
+        .order_by(RunSession.date.desc())
         .options(
             selectinload(RunSession.runner),
             selectinload(RunSession.videos),

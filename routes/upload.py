@@ -19,8 +19,9 @@ from response_chemas import UploadSeperatelyStatus, UploadSeperatelyNewRequest, 
 
 router = APIRouter()
 
-TEMP_UPLOAD_DIR = "/home/hsuanya/workspace/running_analysis/backend/data/uploads_temp"
-RUN_SESSION_DIR = "/home/hsuanya/workspace/running_analysis/backend/data/run_sessions"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEMP_UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads_temp")
+RUN_SESSION_DIR = os.path.join(BASE_DIR, "data", "run_sessions")
 os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
 os.makedirs(RUN_SESSION_DIR, exist_ok=True)
 

@@ -5,6 +5,8 @@ from routes.upload import router as upload_router
 from routes.record import router as record_router
 from routes.auth import router as auth_router
 from db.init_db import init_db
+import asyncio
+from utils.cleanup import cleanup_temp_dir_loop
 
 app = FastAPI(root_path="/running_analysis/api")
 
@@ -24,3 +26,6 @@ app.include_router(record_router)
 @app.on_event("startup")
 async def on_startup():
     await init_db()
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    temp_dir = os.path.join(base_dir, "data", "uploads_temp")
+    asyncio.create_task(cleanup_temp_dir_loop(temp_dir))

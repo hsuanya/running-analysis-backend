@@ -43,8 +43,9 @@ TO_FPS = 60
 TO_HEIGHT = 1080
 
 # tracking setting
-WEIGHTS_DET = "/home/hsuanya/workspace/running_analysis/backend/model/yolo11m.pt"   # ultralytics model name
-WEIGHTS_POSE = "/home/hsuanya/workspace/running_analysis/backend/model/yolo11l-pose.pt"   # ultralytics model name
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+WEIGHTS_DET = os.path.join(BASE_DIR, "model", "yolo11m.pt")   # ultralytics model name
+WEIGHTS_POSE = os.path.join(BASE_DIR, "model", "yolo11l-pose.pt")   # ultralytics model name
 DEVICE = "cuda:0"
 MAX_WORKERS_DET = 4   # Num of cores for tracking - Multiple processing
 MAX_WORKERS_POSE = 2   # Num of cores for pose eatimation - Multiple processing
@@ -1091,7 +1092,8 @@ def compute_gait_statistics(
     }
 
 if __name__ == "__main__":
-    root_folder = "/home/hsuanya/workspace/running_analysis/backend/data/run_sessions/d9532b78-1a72-4101-8c9f-1ec812f8bd3b/b857ca3d-d7ed-42be-ab7a-4501203a441e"
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    root_folder = os.path.join(BASE_DIR, "data", "run_sessions", "d9532b78-1a72-4101-8c9f-1ec812f8bd3b", "b857ca3d-d7ed-42be-ab7a-4501203a441e")
     out_final_name = "analyzed_video"
     camera_count = 3
     track_and_draw(root_folder, out_final_name, camera_count)
