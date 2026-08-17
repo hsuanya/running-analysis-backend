@@ -6,6 +6,7 @@ from routes.record import router as record_router
 from routes.auth import router as auth_router
 from db.init_db import init_db
 import asyncio
+import os
 from utils.cleanup import cleanup_temp_dir_loop
 
 app = FastAPI(root_path="/running_analysis/api")
