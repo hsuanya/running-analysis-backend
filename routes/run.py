@@ -158,6 +158,42 @@ async def get_unanalyzed_run_sessions(
         )
     return result
 
+@router.get(
+    "/run_session/{run_session_id}/unanalyzed",
+    response_model=UnanalyzedRunSessionInfoOut
+)
+async def get_unanalyzed_run_session_by_id(
+    run_session_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+) -> UnanalyzedRunSessionInfoOut:
+    run = (await session.execute(
+        select(RunSession)
+        .where(RunSession.id == run_session_id)
+        .where(RunSession.status == "pending")
+        .options(
+            selectinload(RunSession.runner),
+            selectinload(RunSession.videos),
+        )
+    )).scalars().first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Unanalyzed run session not found or already analyzed")
+
+    uploaded = {v.camera_index for v in run.videos}
+    missing = [i for i in range(run.camera_count) if i not in uploaded]
+
+    return UnanalyzedRunSessionInfoOut(
+        runSessionId=run.id,
+        runnerId=run.runner_id,
+        runnerName=run.runner.name,
+        date=run.date,
+        cameraCount=run.camera_count,
+        fps=run.fps,
+        note=run.note,
+        unuploadedCameraIndexes=missing,
+        videoPaths=[v.video_path if v else None for v in run.videos]
+    )
+
 @router.get("/run_session/{run_session_id}")
 async def get_run_session_info(
     run_session_id: UUID,

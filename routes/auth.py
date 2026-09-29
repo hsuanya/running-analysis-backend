@@ -137,8 +137,52 @@ async def login(
     )
     return TokenOut(access_token=access_token, token_type="bearer")
 
+class MarkTourSeenIn(BaseModel):
+    tour_key: str
+
+class ResetTourIn(BaseModel):
+    tour_key: Optional[str] = None
+
 @router.get("/verify", response_model=dict)
 async def verify(
     current_user: User = Depends(get_current_user)
 ):
-    return {"status": "ok", "username": current_user.username}
+    seen_list = [t.strip() for t in (current_user.seen_tours or "").split(",") if t.strip()]
+    return {
+        "status": "ok",
+        "username": current_user.username,
+        "seen_tours": seen_list,
+    }
+
+@router.post("/seen-tours", response_model=dict)
+async def mark_tour_seen(
+    data: MarkTourSeenIn,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    existing = [t.strip() for t in (current_user.seen_tours or "").split(",") if t.strip()]
+    if data.tour_key not in existing:
+        existing.append(data.tour_key)
+        current_user.seen_tours = ",".join(existing)
+        session.add(current_user)
+        await session.commit()
+        await session.refresh(current_user)
+    return {"status": "ok", "seen_tours": existing}
+
+@router.post("/reset-tours", response_model=dict)
+async def reset_tour_seen(
+    data: ResetTourIn,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if data.tour_key:
+        existing = [t.strip() for t in (current_user.seen_tours or "").split(",") if t.strip()]
+        existing = [t for t in existing if t != data.tour_key]
+        current_user.seen_tours = ",".join(existing)
+    else:
+        current_user.seen_tours = ""
+    session.add(current_user)
+    await session.commit()
+    await session.refresh(current_user)
+    seen_list = [t.strip() for t in (current_user.seen_tours or "").split(",") if t.strip()]
+    return {"status": "ok", "seen_tours": seen_list}

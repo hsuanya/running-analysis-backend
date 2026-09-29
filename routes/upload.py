@@ -363,12 +363,12 @@ async def upload_seperately_new(
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ) -> UploadSeperatelyStatus:
-    # Verify runner belongs to current user
+    # Verify runner exists
     runner = (await session.execute(
-        select(Runner).where(Runner.id == UUID(req.runnerId)).where(Runner.user_id == current_user.id)
+        select(Runner).where(Runner.id == UUID(req.runnerId))
     )).scalars().first()
     if not runner:
-        raise HTTPException(status_code=404, detail="Runner not found or unauthorized")
+        raise HTTPException(status_code=404, detail="Runner not found")
 
     # 建立 RunSession
     runSession = RunSession(
@@ -435,12 +435,12 @@ async def upload_seperately_select(
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ) -> UploadSeperatelyStatus:
-    # Verify runner belongs to current user
-    runner = (await session.execute(
-        select(Runner).where(Runner.id == UUID(req.runnerId)).where(Runner.user_id == current_user.id)
-    )).scalars().first()
-    if not runner:
-        raise HTTPException(status_code=404, detail="Runner not found or unauthorized")
+    # Verify run session and runner exist
+    runSession = await session.get(RunSession, UUID(req.runSessionId))
+    if not runSession:
+        raise HTTPException(status_code=404, detail="RunSession not found")
+    if str(runSession.runner_id) != str(UUID(req.runnerId)):
+        raise HTTPException(status_code=400, detail="Runner ID mismatch for RunSession")
 
     stored_path = move_temp_video_and_del_thumbnail(req.tempVideoId, req.runnerId, req.runSessionId, req.cameraIndex)
     

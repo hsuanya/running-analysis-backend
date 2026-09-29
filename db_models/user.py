@@ -12,6 +12,7 @@ class User(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     username: str = Field(unique=True, index=True)
     hashed_password: str
+    seen_tours: str = Field(default="")
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     runners: List["Runner"] = Relationship(back_populates="user")
