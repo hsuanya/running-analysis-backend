@@ -17,6 +17,7 @@ class RunSession(SQLModel, table=True):
     date: datetime = Field(default_factory=datetime.utcnow)
     fps: int = Field(default=60)
     camera_count: int = Field(default=5)
+    track_width_m: float = Field(default=1.22, description="Track lane width in meters")
     note: str = Field(default="")
 
     status: str = Field(

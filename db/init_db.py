@@ -20,6 +20,11 @@ async def init_db():
             # 如果欄位已存在，此處會拋出 OperationalError (duplicate column name)，可以安全忽略
             pass
 
+        try:
+            await conn.execute(text("ALTER TABLE run_session ADD COLUMN track_width_m FLOAT DEFAULT 1.22"))
+        except Exception:
+            pass
+
         # 進行 video 表格的欄位升級
         try:
             await conn.execute(text("ALTER TABLE video ADD COLUMN left_to_mid_distance_m FLOAT"))

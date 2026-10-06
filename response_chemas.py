@@ -18,6 +18,7 @@ class RunSessionInfoOut(BaseModel):
     date: datetime
     cameraCount: int
     fps: int
+    trackWidth: Optional[float] = 1.22
     avgVelocity: Optional[float] = None
     avgAcceleration: Optional[float] = None
     avgStepLength: Optional[float] = None
@@ -33,6 +34,7 @@ class UnanalyzedRunSessionInfoOut(BaseModel):
     date: datetime
     cameraCount: int
     fps: int
+    trackWidth: Optional[float] = 1.22
     note: str
     unuploadedCameraIndexes: List[int]
     videoPaths: List[Optional[str]]
@@ -68,6 +70,7 @@ class UploadAllRequest(BaseModel):
     date: str
     fps: int
     cameraCount: int
+    trackWidth: Optional[float] = 1.22
     note: str
     # 原本是 tempVideoIds: list[str]，改為包含錨點的物件列表
     videos: List[VideoUploadInfo]
@@ -83,6 +86,7 @@ class UploadSeperatelyNewRequest(BaseModel):
     date: str
     fps: int
     cameraCount: int
+    trackWidth: Optional[float] = 1.22
     note: str
     cameraIndex: int
     tempVideoId: str

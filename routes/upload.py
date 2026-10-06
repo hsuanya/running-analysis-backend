@@ -78,9 +78,12 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
             stmt = select(Video).where(Video.run_session_id == UUID(run_session_id))
             result = await session.execute(stmt)
             videos = result.scalars().all()
+            track_w = float(getattr(run_session, "track_width_m", 1.22) or 1.22)
             
             config_dict = {
                 "cameras": [],
+                "track_width_m": track_w,
+                "lane_width_m": track_w,
                 "auto_crop": True,
                 "tracking_mode": "two_pass",
                 "prescan_enabled": True,
@@ -92,7 +95,7 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
             import cv2
             for v in videos_sorted:
                 anchors = json.loads(v.anchors) if v.anchors else None
-                cam_cfg = {"video_path": v.video_path}
+                cam_cfg = {"video_path": v.video_path, "track_width_m": track_w, "lane_width_m": track_w}
                 if anchors:
                     cap = cv2.VideoCapture(v.video_path)
                     w, h = 0, 0
@@ -141,12 +144,12 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                             ]
                         
                         cam_cfg["homography_dst_world"] = [
-                            [0.0, 1.22],       # TL
-                            [0.0, 0.0],        # BL
-                            [D1, 0.0],         # BM
-                            [D1, 1.22],        # TM
-                            [D1 + D2, 0.0],    # BR
-                            [D1 + D2, 1.22],   # TR
+                            [0.0, track_w],       # TL
+                            [0.0, 0.0],           # BL
+                            [D1, 0.0],            # BM
+                            [D1, track_w],        # TM
+                            [D1 + D2, 0.0],       # BR
+                            [D1 + D2, track_w],   # TR
                         ]
                         cam_cfg["distance_m"] = D1 + D2
                     elif len(anchors) == 4:
@@ -176,11 +179,14 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                     "anchors": anchors,
                     "left_to_mid_distance_m": v.left_to_mid_distance_m,
                     "mid_to_right_distance_m": v.mid_to_right_distance_m,
+                    "track_width_m": track_w,
                 })
             
             meta_data = {
                 "run_session_id": run_session_id,
                 "camera_count": camera_count,
+                "track_width_m": track_w,
+                "lane_width_m": track_w,
                 "cameras": meta_data_cameras
             }
             
@@ -317,6 +323,7 @@ async def upload_all_info(
         date=datetime.strptime(req.date, "%Y-%m-%d %H:%M:%S"),
         fps=req.fps,
         camera_count=req.cameraCount,
+        track_width_m=req.trackWidth if req.trackWidth is not None else 1.22,
         note=req.note
     )
     session.add(runSession)
@@ -376,6 +383,7 @@ async def upload_seperately_new(
         date=datetime.strptime(req.date, "%Y-%m-%d %H:%M:%S"),
         fps=req.fps,
         camera_count=req.cameraCount,
+        track_width_m=req.trackWidth if req.trackWidth is not None else 1.22,
         note=req.note
     )
     session.add(runSession)
