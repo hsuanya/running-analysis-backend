@@ -25,6 +25,11 @@ async def init_db():
         except Exception:
             pass
 
+        try:
+            await conn.execute(text("ALTER TABLE run_session ADD COLUMN running_direction TEXT DEFAULT 'left_to_right'"))
+        except Exception:
+            pass
+
         # 進行 video 表格的欄位升級
         try:
             await conn.execute(text("ALTER TABLE video ADD COLUMN left_to_mid_distance_m FLOAT"))

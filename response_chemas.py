@@ -19,6 +19,7 @@ class RunSessionInfoOut(BaseModel):
     cameraCount: int
     fps: int
     trackWidth: Optional[float] = 1.22
+    runningDirection: Optional[str] = "left_to_right"
     avgVelocity: Optional[float] = None
     avgAcceleration: Optional[float] = None
     avgStepLength: Optional[float] = None
@@ -35,6 +36,7 @@ class UnanalyzedRunSessionInfoOut(BaseModel):
     cameraCount: int
     fps: int
     trackWidth: Optional[float] = 1.22
+    runningDirection: Optional[str] = "left_to_right"
     note: str
     unuploadedCameraIndexes: List[int]
     videoPaths: List[Optional[str]]
@@ -71,6 +73,7 @@ class UploadAllRequest(BaseModel):
     fps: int
     cameraCount: int
     trackWidth: Optional[float] = 1.22
+    runningDirection: Optional[str] = "left_to_right"
     note: str
     # 原本是 tempVideoIds: list[str]，改為包含錨點的物件列表
     videos: List[VideoUploadInfo]
@@ -87,6 +90,7 @@ class UploadSeperatelyNewRequest(BaseModel):
     fps: int
     cameraCount: int
     trackWidth: Optional[float] = 1.22
+    runningDirection: Optional[str] = "left_to_right"
     note: str
     cameraIndex: int
     tempVideoId: str

@@ -102,6 +102,7 @@ async def get_runner_run_sessions(
                 cameraCount=run.camera_count,
                 fps=run.fps,
                 trackWidth=getattr(run, "track_width_m", 1.22) or 1.22,
+                runningDirection=getattr(run, "running_direction", "left_to_right") or "left_to_right",
                 note=run.note,
                 avgVelocity=round(run.analysis.avg_velocity, 3) if run.analysis and run.analysis.avg_velocity is not None else None,
                 avgAcceleration=round(run.analysis.avg_acceleration, 3) if run.analysis and run.analysis.avg_acceleration is not None else None,
@@ -153,6 +154,7 @@ async def get_unanalyzed_run_sessions(
                 cameraCount=run.camera_count,
                 fps=run.fps,
                 trackWidth=getattr(run, "track_width_m", 1.22) or 1.22,
+                runningDirection=getattr(run, "running_direction", "left_to_right") or "left_to_right",
                 note=run.note,
                 unuploadedCameraIndexes=missing,
                 videoPaths=[v.video_path if v else None for v in run.videos]
@@ -192,6 +194,7 @@ async def get_unanalyzed_run_session_by_id(
         cameraCount=run.camera_count,
         fps=run.fps,
         trackWidth=getattr(run, "track_width_m", 1.22) or 1.22,
+        runningDirection=getattr(run, "running_direction", "left_to_right") or "left_to_right",
         note=run.note,
         unuploadedCameraIndexes=missing,
         videoPaths=[v.video_path if v else None for v in run.videos]
@@ -223,6 +226,7 @@ async def get_run_session_info(
             cameraCount=run_session.camera_count,
             fps=run_session.fps,
             trackWidth=getattr(run_session, "track_width_m", 1.22) or 1.22,
+            runningDirection=getattr(run_session, "running_direction", "left_to_right") or "left_to_right",
             note=run_session.note,
             status=run_session.status,
             progress=run_session.progress
@@ -237,6 +241,7 @@ async def get_run_session_info(
         cameraCount=run_session.camera_count,
         fps=run_session.fps,
         trackWidth=getattr(run_session, "track_width_m", 1.22) or 1.22,
+        runningDirection=getattr(run_session, "running_direction", "left_to_right") or "left_to_right",
         note=run_session.note,
         status=run_session.status,
         progress=run_session.progress,

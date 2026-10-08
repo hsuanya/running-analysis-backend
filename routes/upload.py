@@ -79,11 +79,14 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
             result = await session.execute(stmt)
             videos = result.scalars().all()
             track_w = float(getattr(run_session, "track_width_m", 1.22) or 1.22)
+            running_dir = getattr(run_session, "running_direction", "left_to_right") or "left_to_right"
+            is_r2l = (running_dir == "right_to_left")
             
             config_dict = {
                 "cameras": [],
                 "track_width_m": track_w,
                 "lane_width_m": track_w,
+                "running_direction": running_dir,
                 "auto_crop": True,
                 "tracking_mode": "two_pass",
                 "prescan_enabled": True,
@@ -95,7 +98,7 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
             import cv2
             for v in videos_sorted:
                 anchors = json.loads(v.anchors) if v.anchors else None
-                cam_cfg = {"video_path": v.video_path, "track_width_m": track_w, "lane_width_m": track_w}
+                cam_cfg = {"video_path": v.video_path, "track_width_m": track_w, "lane_width_m": track_w, "running_direction": running_dir}
                 if anchors:
                     cap = cv2.VideoCapture(v.video_path)
                     w, h = 0, 0
@@ -111,14 +114,25 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                         D1 = v.left_to_mid_distance_m or 0.0
                         D2 = v.mid_to_right_distance_m or 0.0
                         
+                        if is_r2l:
+                            # Right-to-Left:
+                            # Runner starts at right (TR, BR) and ends at left (TL, BL)
+                            start_anchor_1, start_anchor_2 = anchors[1], anchors[2] # TR, BR
+                            end_anchor_1, end_anchor_2 = anchors[0], anchors[3]     # TL, BL
+                        else:
+                            # Left-to-Right:
+                            # Runner starts at left (TL, BL) and ends at right (TR, BR)
+                            start_anchor_1, start_anchor_2 = anchors[0], anchors[3] # TL, BL
+                            end_anchor_1, end_anchor_2 = anchors[1], anchors[2]     # TR, BR
+
                         if w > 0 and h > 0:
                             cam_cfg["start_line"] = [
-                                [int(anchors[0]["x"] * w), int(anchors[0]["y"] * h)],
-                                [int(anchors[3]["x"] * w), int(anchors[3]["y"] * h)]
+                                [int(start_anchor_1["x"] * w), int(start_anchor_1["y"] * h)],
+                                [int(start_anchor_2["x"] * w), int(start_anchor_2["y"] * h)]
                             ]
                             cam_cfg["end_line"] = [
-                                [int(anchors[1]["x"] * w), int(anchors[1]["y"] * h)],
-                                [int(anchors[2]["x"] * w), int(anchors[2]["y"] * h)]
+                                [int(end_anchor_1["x"] * w), int(end_anchor_1["y"] * h)],
+                                [int(end_anchor_2["x"] * w), int(end_anchor_2["y"] * h)]
                             ]
                             # 6 points pixels in order matching build_lane_world_points:
                             # TL, BL, BM, TM, BR, TR
@@ -132,8 +146,8 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                             ]
                         else:
                             # Fallback if invalid dimensions
-                            cam_cfg["start_line"] = [[anchors[0]["x"], anchors[0]["y"]], [anchors[3]["x"], anchors[3]["y"]]]
-                            cam_cfg["end_line"] = [[anchors[1]["x"], anchors[1]["y"]], [anchors[2]["x"], anchors[2]["y"]]]
+                            cam_cfg["start_line"] = [[start_anchor_1["x"], start_anchor_1["y"]], [start_anchor_2["x"], start_anchor_2["y"]]]
+                            cam_cfg["end_line"] = [[end_anchor_1["x"], end_anchor_1["y"]], [end_anchor_2["x"], end_anchor_2["y"]]]
                             cam_cfg["homography_src_points"] = [
                                 [anchors[0]["x"], anchors[0]["y"]],
                                 [anchors[3]["x"], anchors[3]["y"]],
@@ -143,30 +157,47 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                                 [anchors[1]["x"], anchors[1]["y"]],
                             ]
                         
-                        cam_cfg["homography_dst_world"] = [
-                            [0.0, track_w],       # TL
-                            [0.0, 0.0],           # BL
-                            [D1, 0.0],            # BM
-                            [D1, track_w],        # TM
-                            [D1 + D2, 0.0],       # BR
-                            [D1 + D2, track_w],   # TR
-                        ]
+                        if is_r2l:
+                            cam_cfg["homography_dst_world"] = [
+                                [D1 + D2, track_w],   # TL (far left = final distance)
+                                [D1 + D2, 0.0],       # BL
+                                [D2, 0.0],            # BM (mid = D2 from start at right)
+                                [D2, track_w],        # TM
+                                [0.0, 0.0],           # BR (start at right = 0m)
+                                [0.0, track_w],       # TR
+                            ]
+                        else:
+                            cam_cfg["homography_dst_world"] = [
+                                [0.0, track_w],       # TL
+                                [0.0, 0.0],           # BL
+                                [D1, 0.0],            # BM
+                                [D1, track_w],        # TM
+                                [D1 + D2, 0.0],       # BR
+                                [D1 + D2, track_w],   # TR
+                            ]
                         cam_cfg["distance_m"] = D1 + D2
                     elif len(anchors) == 4:
                         # Legacy 4-point layout
+                        if is_r2l:
+                            start_anchor_1, start_anchor_2 = anchors[1], anchors[2] # TR, BR
+                            end_anchor_1, end_anchor_2 = anchors[0], anchors[3]     # TL, BL
+                        else:
+                            start_anchor_1, start_anchor_2 = anchors[0], anchors[3] # TL, BL
+                            end_anchor_1, end_anchor_2 = anchors[1], anchors[2]     # TR, BR
+
                         if w > 0 and h > 0:
                             cam_cfg["start_line"] = [
-                                [int(anchors[0]["x"] * w), int(anchors[0]["y"] * h)],
-                                [int(anchors[3]["x"] * w), int(anchors[3]["y"] * h)]
+                                [int(start_anchor_1["x"] * w), int(start_anchor_1["y"] * h)],
+                                [int(start_anchor_2["x"] * w), int(start_anchor_2["y"] * h)]
                             ]
                             cam_cfg["end_line"] = [
-                                [int(anchors[1]["x"] * w), int(anchors[1]["y"] * h)],
-                                [int(anchors[2]["x"] * w), int(anchors[2]["y"] * h)]
+                                [int(end_anchor_1["x"] * w), int(end_anchor_1["y"] * h)],
+                                [int(end_anchor_2["x"] * w), int(end_anchor_2["y"] * h)]
                             ]
                         else:
                             # Fallback
-                            cam_cfg["start_line"] = [[anchors[0]["x"], anchors[0]["y"]], [anchors[1]["x"], anchors[1]["y"]]]
-                            cam_cfg["end_line"] = [[anchors[2]["x"], anchors[2]["y"]], [anchors[3]["x"], anchors[3]["y"]]]
+                            cam_cfg["start_line"] = [[start_anchor_1["x"], start_anchor_1["y"]], [start_anchor_2["x"], start_anchor_2["y"]]]
+                            cam_cfg["end_line"] = [[end_anchor_1["x"], end_anchor_1["y"]], [end_anchor_2["x"], end_anchor_2["y"]]]
                         
                         D1 = v.left_to_mid_distance_m or 0.0
                         D2 = v.mid_to_right_distance_m or 0.0
@@ -180,6 +211,7 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                     "left_to_mid_distance_m": v.left_to_mid_distance_m,
                     "mid_to_right_distance_m": v.mid_to_right_distance_m,
                     "track_width_m": track_w,
+                    "running_direction": running_dir,
                 })
             
             meta_data = {
@@ -187,6 +219,7 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                 "camera_count": camera_count,
                 "track_width_m": track_w,
                 "lane_width_m": track_w,
+                "running_direction": running_dir,
                 "cameras": meta_data_cameras
             }
             
@@ -324,6 +357,7 @@ async def upload_all_info(
         fps=req.fps,
         camera_count=req.cameraCount,
         track_width_m=req.trackWidth if req.trackWidth is not None else 1.22,
+        running_direction=req.runningDirection if req.runningDirection else "left_to_right",
         note=req.note
     )
     session.add(runSession)
@@ -384,6 +418,7 @@ async def upload_seperately_new(
         fps=req.fps,
         camera_count=req.cameraCount,
         track_width_m=req.trackWidth if req.trackWidth is not None else 1.22,
+        running_direction=req.runningDirection if req.runningDirection else "left_to_right",
         note=req.note
     )
     session.add(runSession)

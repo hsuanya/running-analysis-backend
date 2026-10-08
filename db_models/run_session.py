@@ -18,6 +18,7 @@ class RunSession(SQLModel, table=True):
     fps: int = Field(default=60)
     camera_count: int = Field(default=5)
     track_width_m: float = Field(default=1.22, description="Track lane width in meters")
+    running_direction: str = Field(default="left_to_right", description="Running direction: left_to_right or right_to_left")
     note: str = Field(default="")
 
     status: str = Field(
