@@ -167,6 +167,24 @@ async def record_websocket(websocket: WebSocket):
                         "data": msg_data
                     })
 
+            elif msg_type == "kickMember":
+                if current_room and current_member and current_member.is_master:
+                    if current_room.recording_status != "recording":
+                        target_member_id = msg_data.get("targetMemberId")
+                        target = next((m for m in current_room.members if m.id == target_member_id), None)
+                        if target and target != current_member and not target.is_master:
+                            try:
+                                await target.ws.send_json({
+                                    "type": "kicked",
+                                    "data": {"message": "kickedByHost"}
+                                })
+                                await target.ws.close()
+                            except Exception:
+                                pass
+                            if target in current_room.members:
+                                current_room.members.remove(target)
+                            await current_room.broadcast_status()
+
             elif msg_type == "startRecording":
                 if current_room:
                     scheduled_time = datetime.now(timezone.utc) + timedelta(seconds=2.0)
