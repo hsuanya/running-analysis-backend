@@ -1,5 +1,6 @@
 import json
 import uuid
+import asyncio
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Dict, List, Any
@@ -42,15 +43,26 @@ class Room:
             self.members.remove(m)
 
     async def broadcast_status(self):
-        msg = {
-            "type": "roomStatus",
-            "data": {
-                "roomId": self.id,
-                "expectedCameraCount": self.expected_camera_count,
-                "members": [m.to_dict() for m in self.members]
+        disconnected = []
+        members_data = [m.to_dict() for m in self.members]
+        for member in list(self.members):
+            msg = {
+                "type": "roomStatus",
+                "data": {
+                    "roomId": self.id,
+                    "expectedCameraCount": self.expected_camera_count,
+                    "members": members_data,
+                    "myMemberId": member.id
+                }
             }
-        }
-        await self.broadcast(msg)
+            try:
+                await member.ws.send_json(msg)
+            except Exception:
+                disconnected.append(member)
+        
+        for m in disconnected:
+            if m in self.members:
+                self.members.remove(m)
 
 class RoomManager:
     def __init__(self):
@@ -87,7 +99,6 @@ async def record_websocket(websocket: WebSocket):
             msg_type = msg.get("type")
             msg_data = msg.get("data", {})
 
-            # print(f"📦 [Test] 收到訊息: {msg_type}", flush=True)
             if msg_type == "sync":
                 client_send_time = msg_data.get("clientSendTime", "")
                 server_time = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
@@ -115,20 +126,45 @@ async def record_websocket(websocket: WebSocket):
                 room = manager.get_room(room_id)
                 if room:
                     current_room = room
+
                     # Check if member already in room
                     existing = next((m for m in room.members if m.id == member_id), None)
                     if existing:
                         existing.camera_index = camera_index
-                        existing.is_ready = camera_index is None
+                        if camera_index is None:
+                            existing.is_ready = True
+                        if is_master:
+                            existing.is_master = True
                         current_member = existing
                     else:
                         current_member = RoomMember(member_id, websocket, camera_index, is_master)
                         room.members.append(current_member)
+
+                    # 若此成員為主控端，確保同一房間內其他失效的 master 狀態被更新
+                    if is_master:
+                        for m in room.members:
+                            if m.id != member_id and m.is_master:
+                                m.is_master = False
+
                     await room.broadcast_status()
                 else:
                     await websocket.send_json({
                         "type": "error",
                         "data": {"message": f"找不到房間: {room_id}"}
+                    })
+
+            elif msg_type == "leaveRoom":
+                if current_room and current_member in current_room.members:
+                    current_room.members.remove(current_member)
+                    await current_room.broadcast_status()
+                current_room = None
+                current_member = None
+
+            elif msg_type == "notifyNotReady":
+                if current_room:
+                    await current_room.broadcast({
+                        "type": "notifyNotReady",
+                        "data": msg_data
                     })
 
             elif msg_type == "startRecording":
@@ -251,12 +287,14 @@ async def record_websocket(websocket: WebSocket):
         if current_room and current_member in current_room.members:
             current_room.members.remove(current_member)
             if not current_room.members:
-                if current_room.id in manager.rooms:
-                    del manager.rooms[current_room.id]
+                async def cleanup_room(rid):
+                    await asyncio.sleep(60)
+                    if rid in manager.rooms and not manager.rooms[rid].members:
+                        del manager.rooms[rid]
+                asyncio.create_task(cleanup_room(current_room.id))
             else:
                 await current_room.broadcast_status()
-    except Exception as e:
-        print(f"WebSocket error: {e}", flush=True)
+    except Exception:
         if current_room and current_member in current_room.members:
             current_room.members.remove(current_member)
             await current_room.broadcast_status()
