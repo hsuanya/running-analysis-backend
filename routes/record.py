@@ -8,20 +8,24 @@ from typing import Dict, List, Any
 router = APIRouter()
 
 class RoomMember:
-    def __init__(self, member_id: str, ws: WebSocket, camera_index: int = None, is_master: bool = False):
+    def __init__(self, member_id: str, ws: WebSocket, camera_index: int = None, is_master: bool = False, camera_name: str = None, camera_specs: str = None):
         self.id = member_id
         self.ws = ws
         self.camera_index = camera_index
         self.is_master = is_master
         # 如果不參與錄影 (camera_index 為 None)，預設為就緒
         self.is_ready = camera_index is None
+        self.camera_name = camera_name
+        self.camera_specs = camera_specs
 
     def to_dict(self):
         return {
             "id": self.id,
             "cameraIndex": self.camera_index,
             "isMaster": self.is_master,
-            "isReady": self.is_ready
+            "isReady": self.is_ready,
+            "cameraName": getattr(self, "camera_name", None),
+            "cameraSpecs": getattr(self, "camera_specs", None),
         }
 
 class Room:
@@ -122,6 +126,8 @@ async def record_websocket(websocket: WebSocket):
                 room_id = msg_data.get("roomId", "").upper()
                 camera_index = msg_data.get("cameraIndex")
                 is_master = msg_data.get("isMaster", False)
+                camera_name = msg_data.get("cameraName")
+                camera_specs = msg_data.get("cameraSpecs")
 
                 room = manager.get_room(room_id)
                 if room:
@@ -133,11 +139,18 @@ async def record_websocket(websocket: WebSocket):
                         existing.camera_index = camera_index
                         if camera_index is None:
                             existing.is_ready = True
+                            existing.camera_name = None
+                            existing.camera_specs = None
+                        else:
+                            if camera_name is not None:
+                                existing.camera_name = camera_name
+                            if camera_specs is not None:
+                                existing.camera_specs = camera_specs
                         if is_master:
                             existing.is_master = True
                         current_member = existing
                     else:
-                        current_member = RoomMember(member_id, websocket, camera_index, is_master)
+                        current_member = RoomMember(member_id, websocket, camera_index, is_master, camera_name, camera_specs)
                         room.members.append(current_member)
 
                     # 若此成員為主控端，確保同一房間內其他失效的 master 狀態被更新
@@ -152,6 +165,17 @@ async def record_websocket(websocket: WebSocket):
                         "type": "error",
                         "data": {"message": f"找不到房間: {room_id}"}
                     })
+
+            elif msg_type == "updateCameraInfo":
+                if current_member:
+                    if current_member.camera_index is not None:
+                        current_member.camera_name = msg_data.get("cameraName")
+                        current_member.camera_specs = msg_data.get("cameraSpecs")
+                    else:
+                        current_member.camera_name = None
+                        current_member.camera_specs = None
+                    if current_room:
+                        await current_room.broadcast_status()
 
             elif msg_type == "leaveRoom":
                 if current_room and current_member in current_room.members:
