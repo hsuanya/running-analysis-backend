@@ -74,10 +74,29 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                         await sess.commit()
                 asyncio.run_coroutine_threadsafe(update_db(), loop)
 
-            # 1️⃣ 準備 metadata.json (包含所有相機的錨點)
+            # 0️⃣ 影片規格標準化：自動探測解析度與 FPS，統一轉檔標準化為 1080p CFR MP4，並同步更新 RunSession.fps
+            from utils.video_normalizer import normalize_session_videos
             stmt = select(Video).where(Video.run_session_id == UUID(run_session_id))
             result = await session.execute(stmt)
             videos = result.scalars().all()
+            videos_sorted = sorted(videos, key=lambda x: x.camera_index)
+
+            await normalize_session_videos(
+                session=session,
+                run_session=run_session,
+                videos=videos_sorted,
+                folder=folder,
+                progress_callback=progress_callback
+            )
+
+            # 重新取得標準化後的 run_session 與 videos
+            await session.refresh(run_session)
+            stmt = select(Video).where(Video.run_session_id == UUID(run_session_id))
+            result = await session.execute(stmt)
+            videos = result.scalars().all()
+            videos_sorted = sorted(videos, key=lambda x: x.camera_index)
+
+            # 1️⃣ 準備 metadata.json (包含所有相機的錨點)
             track_w = float(getattr(run_session, "track_width_m", 1.22) or 1.22)
             running_dir = getattr(run_session, "running_direction", "left_to_right") or "left_to_right"
             is_r2l = (running_dir == "right_to_left")
@@ -92,7 +111,6 @@ async def analyze_and_save(runner_id: str, run_session_id: str, camera_count: in
                 "prescan_enabled": True,
                 "prescan_engine_path": os.path.join(pipeline_dir, "models", "yolo26x_ultralytics_int8.engine"),
             }
-            videos_sorted = sorted(videos, key=lambda x: x.camera_index)
             meta_data_cameras = []
             
             import cv2
@@ -354,7 +372,7 @@ async def upload_all_info(
     runSession = RunSession(
         runner_id=UUID(req.runnerId),
         date=datetime.strptime(req.date, "%Y-%m-%d %H:%M:%S"),
-        fps=req.fps,
+        fps=req.fps if req.fps is not None else 60,
         camera_count=req.cameraCount,
         track_width_m=req.trackWidth if req.trackWidth is not None else 1.22,
         running_direction=req.runningDirection if req.runningDirection else "left_to_right",
@@ -415,7 +433,7 @@ async def upload_seperately_new(
     runSession = RunSession(
         runner_id=UUID(req.runnerId),
         date=datetime.strptime(req.date, "%Y-%m-%d %H:%M:%S"),
-        fps=req.fps,
+        fps=req.fps if req.fps is not None else 60,
         camera_count=req.cameraCount,
         track_width_m=req.trackWidth if req.trackWidth is not None else 1.22,
         running_direction=req.runningDirection if req.runningDirection else "left_to_right",

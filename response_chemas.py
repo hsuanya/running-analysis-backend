@@ -70,7 +70,7 @@ class VideoUploadInfo(BaseModel):
 class UploadAllRequest(BaseModel):
     runnerId: str
     date: str
-    fps: int
+    fps: Optional[int] = 60
     cameraCount: int
     trackWidth: Optional[float] = 1.22
     runningDirection: Optional[str] = "left_to_right"
@@ -87,7 +87,7 @@ class UploadSeperatelyStatus(BaseModel):
 class UploadSeperatelyNewRequest(BaseModel):
     runnerId: str
     date: str
-    fps: int
+    fps: Optional[int] = 60
     cameraCount: int
     trackWidth: Optional[float] = 1.22
     runningDirection: Optional[str] = "left_to_right"
