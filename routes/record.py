@@ -13,8 +13,8 @@ class RoomMember:
         self.ws = ws
         self.camera_index = camera_index
         self.is_master = is_master
-        # 如果不參與錄影 (camera_index 為 None)，預設為就緒
-        self.is_ready = camera_index is None
+        # 僅主控端且不參與錄影 (is_master and camera_index is None) 時，預設為就緒
+        self.is_ready = bool(is_master and camera_index is None)
         self.camera_name = camera_name
         self.camera_specs = camera_specs
 
@@ -132,16 +132,24 @@ async def record_websocket(websocket: WebSocket):
                 room = manager.get_room(room_id)
                 if room:
                     current_room = room
+                    if camera_index is not None and (
+                        camera_index < 0 or camera_index >= room.expected_camera_count
+                    ):
+                        camera_index = None
 
                     # Check if member already in room
                     existing = next((m for m in room.members if m.id == member_id), None)
                     if existing:
                         existing.camera_index = camera_index
                         if camera_index is None:
-                            existing.is_ready = True
+                            existing.is_ready = bool(is_master or existing.is_master)
                             existing.camera_name = None
                             existing.camera_specs = None
                         else:
+                            if "isReady" in msg_data:
+                                existing.is_ready = bool(msg_data["isReady"])
+                            else:
+                                existing.is_ready = False
                             if camera_name is not None:
                                 existing.camera_name = camera_name
                             if camera_specs is not None:
@@ -150,7 +158,12 @@ async def record_websocket(websocket: WebSocket):
                             existing.is_master = True
                         current_member = existing
                     else:
+                        if camera_index is None:
+                            is_ready = bool(is_master)
+                        else:
+                            is_ready = bool(msg_data.get("isReady", False))
                         current_member = RoomMember(member_id, websocket, camera_index, is_master, camera_name, camera_specs)
+                        current_member.is_ready = is_ready
                         room.members.append(current_member)
 
                     # 若此成員為主控端，確保同一房間內其他失效的 master 狀態被更新
@@ -320,7 +333,7 @@ async def record_websocket(websocket: WebSocket):
                             try:
                                 await requester.ws.send_json({
                                     "type": "controlRejected",
-                                    "data": {"message": "房主拒絕了您的主控權要求"}
+                                    "data": {"message": "controlDenied"}
                                 })
                             except Exception:
                                 pass

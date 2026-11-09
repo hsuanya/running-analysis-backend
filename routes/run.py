@@ -515,7 +515,7 @@ async def get_run_session_graphs(
                                           category="angles"))
     return graphs
 
-@router.get("/run_session/{run_session_id}/video")
+@router.api_route("/run_session/{run_session_id}/video", methods=["GET", "HEAD"])
 async def get_run_session_video(
     run_session_id: UUID,
     session: AsyncSession = Depends(get_session),
@@ -549,7 +549,7 @@ async def get_run_session_video(
     if not video_path or not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail="Video not found")
 
-    return FileResponse(video_path)
+    return FileResponse(video_path, media_type="video/mp4")
 
 
 @router.get("/temp_video/{temp_video_id}/thumbnail")
